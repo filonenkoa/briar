@@ -110,6 +110,7 @@ public class StartupViewModel extends AndroidViewModel
 		ioExecutor.execute(() -> {
 			try {
 				accountManager.signIn(password);
+				accountManager.savePassword(password);
 				passwordValidated.postEvent(SUCCESS);
 				state.postValue(SIGNED_IN);
 			} catch (DecryptionException e) {

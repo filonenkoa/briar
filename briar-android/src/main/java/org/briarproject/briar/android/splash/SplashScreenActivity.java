@@ -53,6 +53,7 @@ public class SplashScreenActivity extends BaseActivity {
 		setPreferencesDefaults();
 		setContentView(R.layout.splash);
 
+		accountManager.tryAutoSignIn();
 		if (accountManager.hasDatabaseKey()) {
 			startNextActivity(ENTRY_ACTIVITY);
 			finish();

@@ -199,14 +199,7 @@ public class BriarService extends Service {
 
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
-		if (ACTION_LOCK.equals(intent.getAction())) {
-			int pid = intent.getIntExtra(EXTRA_PID, -1);
-			if (pid == myPid()) lockManager.setLocked(true);
-			else if (LOG.isLoggable(WARNING)) {
-				LOG.warning("Tried to lock process " + pid + " but this is " +
-						myPid());
-			}
-		}
+		if (ACTION_LOCK.equals(intent.getAction())) return START_NOT_STICKY;
 		return START_NOT_STICKY; // Don't restart automatically if killed
 	}
 

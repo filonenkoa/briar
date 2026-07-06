@@ -13,7 +13,6 @@ import org.briarproject.android.dontkillmelib.wakelock.AndroidWakeLockManager;
 import org.briarproject.bramble.api.system.Wakeful;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.BriarApplication;
-import org.briarproject.briar.android.account.UnlockActivity;
 import org.briarproject.briar.android.controller.BriarController;
 import org.briarproject.briar.android.controller.DbController;
 import org.briarproject.briar.android.controller.handler.UiResultHandler;
@@ -46,7 +45,6 @@ import static org.briarproject.android.dontkillmelib.DozeUtils.getDozeWhitelisti
 import static org.briarproject.bramble.util.LogUtils.logException;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_DOZE_WHITELISTING;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_PASSWORD;
-import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_UNLOCK;
 import static org.briarproject.briar.android.util.UiUtils.excludeSystemUi;
 import static org.briarproject.briar.android.util.UiUtils.isSamsung7;
 
@@ -90,14 +88,6 @@ public abstract class BriarActivity extends BaseActivity {
 				}
 				recreate();
 			}
-		} else if (request == REQUEST_UNLOCK && result != RESULT_OK) {
-			// We arrive here, if the user presses 'back'
-			// in the Keyguard unlock screen, because UnlockActivity finishes.
-			// If we don't finish here, isFinishing will be false in onResume()
-			// and we launch a new UnlockActivity causing a loop.
-			supportFinishAfterTransition();
-			// If the result is OK, we don't need to do anything here
-			// and can resume normally.
 		}
 	}
 
@@ -111,13 +101,6 @@ public abstract class BriarActivity extends BaseActivity {
 			LOG.info("Not signed in, launching StartupActivity");
 			Intent i = new Intent(this, StartupActivity.class);
 			startActivityForResult(i, REQUEST_PASSWORD);
-		} else if (lockManager.isLocked() && !isFinishing()) {
-			// Also check that the activity isn't finishing already.
-			// This is possible if we finished in onActivityResult().
-			// Launching another UnlockActivity would cause a loop.
-			LOG.info("Locked, launching UnlockActivity");
-			Intent i = new Intent(this, UnlockActivity.class);
-			startActivityForResult(i, REQUEST_UNLOCK);
 		} else if (SDK_INT >= 23) {
 			briarController.hasDozed(new UiResultHandler<Boolean>(this) {
 				@Override

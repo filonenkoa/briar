@@ -41,11 +41,12 @@ class AccountManagerImpl implements AccountManager {
 
 	private static final String DB_KEY_FILENAME = "db.key";
 	private static final String DB_KEY_BACKUP_FILENAME = "db.key.bak";
+	private static final String PASSWORD_FILENAME = "password";
 
 	private final DatabaseConfig databaseConfig;
 	private final CryptoComponent crypto;
 	private final IdentityManager identityManager;
-	private final File dbKeyFile, dbKeyBackupFile;
+	private final File dbKeyFile, dbKeyBackupFile, passwordFile;
 
 	final Object stateChangeLock = new Object();
 
@@ -61,6 +62,7 @@ class AccountManagerImpl implements AccountManager {
 		File keyDir = databaseConfig.getDatabaseKeyDirectory();
 		dbKeyFile = new File(keyDir, DB_KEY_FILENAME);
 		dbKeyBackupFile = new File(keyDir, DB_KEY_BACKUP_FILENAME);
+		passwordFile = new File(keyDir, PASSWORD_FILENAME);
 	}
 
 	@Override
@@ -237,6 +239,54 @@ class AccountManagerImpl implements AccountManager {
 		synchronized (stateChangeLock) {
 			SecretKey key = loadAndDecryptDatabaseKey(oldPassword);
 			encryptAndStoreDatabaseKey(key, newPassword);
+		}
+	}
+
+	@Override
+	@GuardedBy("stateChangeLock")
+	public void savePassword(String password) {
+		synchronized (stateChangeLock) {
+			try {
+				writeDbKeyToFile(password, passwordFile);
+			} catch (IOException e) {
+				logException(LOG, WARNING, e);
+			}
+		}
+	}
+
+	@Override
+	@GuardedBy("stateChangeLock")
+	public boolean tryAutoSignIn() {
+		String password;
+		synchronized (stateChangeLock) {
+			password = readPasswordFromFile();
+		}
+		if (password == null) return false;
+		try {
+			signIn(password);
+			LOG.info("Successfully auto-signed in");
+			return true;
+		} catch (DecryptionException e) {
+			LOG.warning("Failed to auto sign in: " + e.getDecryptionResult());
+			return false;
+		}
+	}
+
+	@Nullable
+	private String readPasswordFromFile() {
+		if (!passwordFile.exists()) {
+			LOG.info("No stored password");
+			return null;
+		}
+		try {
+			BufferedReader reader = new BufferedReader(new InputStreamReader(
+					new FileInputStream(passwordFile), UTF_8));
+			String password = reader.readLine();
+			reader.close();
+			return password;
+		} catch (IOException e) {
+			logException(LOG, WARNING, e);
+			return null;
 		}
 	}
 }

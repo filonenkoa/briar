@@ -182,7 +182,9 @@ public class NavDrawerActivity extends BriarActivity implements
 		initializeTransports();
 		transportsView.setAdapter(transportsAdapter);
 
-		lockManager.isLockable().observe(this, this::setLockVisible);
+		// App lock is disabled in this build — ensure the button stays hidden.
+		MenuItem lockItem = navigation.getMenu().findItem(R.id.nav_btn_lock);
+		if (lockItem != null) lockItem.setVisible(false);
 
 		if (lifecycleManager.getLifecycleState().isAfter(RUNNING)) {
 			showSignOutFragment();
@@ -367,10 +369,7 @@ public class NavDrawerActivity extends BriarActivity implements
 		// Do nothing for now
 	}
 
-	private void setLockVisible(boolean visible) {
-		MenuItem item = navigation.getMenu().findItem(R.id.nav_btn_lock);
-		if (item != null) item.setVisible(visible);
-	}
+	// setLockVisible removed — app lock is disabled in this build.
 
 	private void showExpiryWarning(boolean show) {
 		long daysUntilExpiry = getDaysUntilExpiry();

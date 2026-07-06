@@ -115,11 +115,6 @@ public class LockManagerImpl implements LockManager, Service, EventListener {
 	@UiThread
 	@Override
 	public void onActivityStart() {
-		if (!locked && activitiesRunning == 0 && timeoutEnabled() &&
-				timedOut()) {
-			// lock the app in case the alarm wasn't run during sleep
-			setLocked(true);
-		}
 		activitiesRunning++;
 		if (alarmSet) {
 			alarmManager.cancel(lockIntent);
@@ -133,13 +128,6 @@ public class LockManagerImpl implements LockManager, Service, EventListener {
 		activitiesRunning--;
 		if (activitiesRunning == 0) {
 			idleTime = elapsedRealtime();
-			if (!locked && timeoutEnabled()) {
-				if (alarmSet) alarmManager.cancel(lockIntent);
-				long triggerAt =
-						elapsedRealtime() + MINUTES.toMillis(timeoutMinutes);
-				alarmManager.set(ELAPSED_REALTIME, triggerAt, lockIntent);
-				alarmSet = true;
-			}
 		}
 	}
 
@@ -160,20 +148,11 @@ public class LockManagerImpl implements LockManager, Service, EventListener {
 
 	@Override
 	public boolean isLocked() {
-		if (locked && !hasScreenLock(appContext)) {
-			lockable.postValue(false);
-			locked = false;
-		} else if (!locked && activitiesRunning == 0 && timeoutEnabled() &&
-				timedOut()) {
-			setLocked(true);
-		}
-		return locked;
+		return false;
 	}
 
 	@Override
 	public void setLocked(boolean locked) {
-		this.locked = locked;
-		notificationManager.updateForegroundNotification(locked);
 	}
 
 	@Override

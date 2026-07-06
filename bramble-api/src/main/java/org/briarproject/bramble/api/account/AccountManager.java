@@ -68,4 +68,16 @@ public interface AccountManager {
 	 */
 	void changePassword(String oldPassword, String newPassword)
 			throws DecryptionException;
+
+	/**
+	 * Stores the password for future auto sign-in on restart. Called after
+	 * account creation and successful manual sign-in.
+	 */
+	void savePassword(String password);
+
+	/**
+	 * Attempts to load a stored password from disk and call signIn(). Returns
+	 * true if auto-sign-in succeeded (key was loaded), false otherwise.
+	 */
+	boolean tryAutoSignIn();
 }
