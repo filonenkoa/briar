@@ -2,8 +2,6 @@ package org.briarproject.briar.android;
 
 import org.briarproject.briar.BuildConfig;
 
-import static java.util.concurrent.TimeUnit.DAYS;
-import static org.briarproject.briar.BuildConfig.BuildTimestamp;
 
 public interface TestingConstants {
 
@@ -21,8 +19,7 @@ public interface TestingConstants {
 	boolean PREVENT_SCREENSHOTS = !IS_DEBUG_BUILD;
 
 	/**
-	 * Debug builds expire after 90 days.
+	 * Fork — expiry disabled entirely.
 	 */
-	long EXPIRY_DATE = IS_DEBUG_BUILD ?
-			BuildTimestamp + DAYS.toMillis(90) : Long.MAX_VALUE;
+	long EXPIRY_DATE = Long.MAX_VALUE;
 }
