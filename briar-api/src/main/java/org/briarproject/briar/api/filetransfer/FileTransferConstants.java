@@ -12,7 +12,7 @@ public interface FileTransferConstants {
 	ClientId CLIENT_ID =
 			new ClientId("org.briarproject.briar.filetransfer");
 	int MAJOR_VERSION = 0;
-	int MINOR_VERSION = 0;
+	int MINOR_VERSION = 1;
 
 	/**
 	 * Maximum payload size of a single chunk. Must stay well below the sync

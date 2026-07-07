@@ -10,9 +10,13 @@ import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.DbCallable;
+import org.briarproject.bramble.api.db.CommitAction;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.EventAction;
+import org.briarproject.bramble.api.db.Metadata;
+import org.briarproject.bramble.api.db.TaskAction;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.sync.Group;
@@ -20,6 +24,7 @@ import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.sync.MessageStatus;
+import org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.bramble.test.BrambleMockTestCase;
 import org.briarproject.briar.api.client.MessageTracker;
@@ -68,9 +73,13 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_LOCAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TRANSFER_STATE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CONTROL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_CANCELLED_BY_SENDER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_REJECTED_BY_RECEIVER;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -788,6 +797,135 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testOutgoingProgressIsCancelledWhenHeaderCancelled()
+			throws Exception {
+		Transaction txn = new Transaction(null, true);
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, true, true, false, false, 0, fileId,
+				"large.bin", "application/octet-stream", CHUNK_SIZE * 2L, 2);
+		BdfDictionary meta = headerMetadata(fileId, "large.bin",
+				CHUNK_SIZE * 2L, 2, 0);
+		meta.put(MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, headerId);
+			will(returnValue(meta));
+			never(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+		}});
+
+		FileTransferProgress p = getOutgoingProgress(txn, header);
+
+		assertEquals(FileTransferProgress.State.CANCELLED, p.getState());
+		assertEquals(0, p.getTransferred());
+	}
+
+	@Test
+	public void testIncomingProgressIsRejectedWhenHeaderRejected()
+			throws Exception {
+		Transaction txn = new Transaction(null, true);
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, false, false, false, false, 0, fileId,
+				"large.bin", "application/octet-stream", CHUNK_SIZE * 2L, 2);
+		BdfDictionary meta = headerMetadata(fileId, "large.bin",
+				CHUNK_SIZE * 2L, 2, 1);
+		meta.put(MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_REJECTED_BY_RECEIVER);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerId, meta);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+		}});
+
+		FileTransferProgress p = getIncomingProgress(txn, header);
+
+		assertEquals(FileTransferProgress.State.REJECTED, p.getState());
+		assertEquals(0, p.getTransferred());
+	}
+
+	@Test
+	public void testIncomingControlSetsHeaderStateAndSchedulesCleanup()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId controlId = new MessageId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		Message control = new Message(controlId, groupId, 1, new byte[] {1});
+		Metadata metadata = new Metadata();
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 2, new byte[] {1, 2});
+		BdfDictionary controlMeta = new BdfDictionary();
+		controlMeta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CONTROL);
+		controlMeta.put(MSG_KEY_FILE_ID, fileId.getBytes());
+		controlMeta.put(MSG_KEY_TRANSFER_STATE,
+				TRANSFER_STATE_CANCELLED_BY_SENDER);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerId, headerMetadata(fileId, "file.bin", 4L, 2, 1));
+		BdfDictionary merge = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+
+		context.checking(new Expectations() {{
+			oneOf(metadataParser).parse(metadata);
+			will(returnValue(controlMeta));
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(groupId)), with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, merge);
+		}});
+
+		DeliveryAction action = manager.incomingMessage(txn, control, metadata);
+
+		assertEquals(DeliveryAction.ACCEPT_DO_NOT_SHARE, action);
+		assertTrue(fileDir.exists());
+		runCommitTasks(txn);
+		assertFalse(fileDir.exists());
+	}
+
+	@Test
+	public void testIncomingChunkForTerminalHeaderIsIgnored()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 1,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 2, new byte[] {1, 2});
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 4L, 2, 0);
+		header.put(MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_REJECTED_BY_RECEIVER);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary meta = chunkMetadata(fileId, 1, 2);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			never(clientHelper).getMessageAsList(txn, chunkMessageId);
+			never(clientHelper).mergeMessageMetadata(with(same(txn)),
+					with(any(MessageId.class)), with(any(BdfDictionary.class)));
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		assertTrue(fileDir.exists());
+		runCommitTasks(txn);
+		assertFalse(fileDir.exists());
+	}
+
+	@Test
 	public void testOutgoingProgressCachesChunkIds() throws Exception {
 		Transaction txn = new Transaction(null, true);
 		Contact contact = getContact();
@@ -800,8 +938,12 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		FileTransferHeader header = new FileTransferHeader(headerId,
 				group.getId(), 1, true, true, false, false, 0, fileId,
 				"file.bin", "application/octet-stream", 1, 1);
+		BdfDictionary headerMeta = headerMetadata(fileId, "file.bin", 1L, 1, 0);
 
 		context.checking(new Expectations() {{
+			exactly(2).of(clientHelper).getMessageMetadataAsDictionary(txn,
+					headerId);
+			will(returnValue(headerMeta));
 			allowing(clientHelper).getGroupMetadataAsDictionary(txn,
 					group.getId());
 			will(returnValue(groupMeta));
@@ -1098,5 +1240,30 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 				FileTransferHeader.class);
 		method.setAccessible(true);
 		return (FileTransferProgress) method.invoke(manager, txn, header);
+	}
+
+	private FileTransferProgress getIncomingProgress(Transaction txn,
+			FileTransferHeader header) throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getIncomingProgress", Transaction.class,
+				FileTransferHeader.class);
+		method.setAccessible(true);
+		return (FileTransferProgress) method.invoke(manager, txn, header);
+	}
+
+	private void runCommitTasks(Transaction txn) {
+		for (CommitAction action : txn.getActions()) {
+			action.accept(new CommitAction.Visitor() {
+				@Override
+				public void visit(EventAction a) {
+					throw new AssertionError();
+				}
+
+				@Override
+				public void visit(TaskAction a) {
+					a.getTask().run();
+				}
+			});
+		}
 	}
 }

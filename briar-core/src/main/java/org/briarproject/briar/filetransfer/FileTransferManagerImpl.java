@@ -82,9 +82,13 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_LOCAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TRANSFER_STATE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CONTROL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_CANCELLED_BY_SENDER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_REJECTED_BY_RECEIVER;
 
 @Immutable
 @NotNullByDefault
@@ -297,6 +301,8 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 				incomingChunk(txn, m, metaDict);
 			} else if (MSG_TYPE_HEADER.equals(messageType)) {
 				incomingHeader(txn, m, metaDict);
+			} else if (MSG_TYPE_CONTROL.equals(messageType)) {
+				incomingControl(txn, m, metaDict);
 			} else {
 				throw new InvalidMessageException();
 			}
@@ -325,6 +331,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
 			if (chunkTotal == total && chunkIndex < total) {
 				matchingHeader = true;
+				if (isTerminal(h)) {
+					scheduleDeleteFileDir(txn, fileId);
+					return;
+				}
 				int received = h.getInt(MSG_KEY_CHUNKS_RECEIVED);
 				if (received >= total) return;
 				if (hasExpectedAssembledFile(fileDir, h)) {
@@ -427,6 +437,23 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		}
 	}
 
+	private void incomingControl(Transaction txn, Message m,
+			BdfDictionary metaDict) throws DbException, FormatException {
+		GroupId groupId = m.getGroupId();
+		UniqueId fileId = new UniqueId(metaDict.getRaw(MSG_KEY_FILE_ID));
+		String transferState = metaDict.getString(MSG_KEY_TRANSFER_STATE);
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
+				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER));
+		Map<MessageId, BdfDictionary> headers =
+				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
+		for (MessageId headerId : headers.keySet()) {
+			setTransferState(txn, headerId, transferState);
+		}
+		invalidateOutgoingProgressCache(fileId);
+		scheduleDeleteFileDir(txn, fileId);
+	}
+
 	private boolean tryAssemble(Transaction txn, GroupId groupId, UniqueId fileId,
 			MessageId headerMessageId) throws DbException, FormatException {
 		BdfDictionary h =
@@ -451,6 +478,30 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		BdfDictionary merge = new BdfDictionary();
 		merge.put(MSG_KEY_CHUNKS_RECEIVED, received);
 		clientHelper.mergeMessageMetadata(txn, messageId, merge);
+	}
+
+	private void setTransferState(Transaction txn, MessageId messageId,
+			String transferState) throws DbException, FormatException {
+		BdfDictionary merge = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, transferState));
+		clientHelper.mergeMessageMetadata(txn, messageId, merge);
+	}
+
+	@Nullable
+	private State getTerminalProgressState(BdfDictionary meta)
+			throws FormatException {
+		String transferState = meta.getOptionalString(MSG_KEY_TRANSFER_STATE);
+		if (TRANSFER_STATE_CANCELLED_BY_SENDER.equals(transferState)) {
+			return State.CANCELLED;
+		}
+		if (TRANSFER_STATE_REJECTED_BY_RECEIVER.equals(transferState)) {
+			return State.REJECTED;
+		}
+		return null;
+	}
+
+	private boolean isTerminal(BdfDictionary meta) throws FormatException {
+		return getTerminalProgressState(meta) != null;
 	}
 
 	private boolean assembleFile(UniqueId fileId, File fileDir, String fileName,
@@ -819,6 +870,45 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	}
 
 	@Override
+	public void cancelFileTransfer(FileTransferHeader h) throws DbException {
+		if (!h.isLocal()) throw new IllegalArgumentException();
+		setTerminalStateAndSendControl(h, TRANSFER_STATE_CANCELLED_BY_SENDER);
+	}
+
+	@Override
+	public void rejectFileTransfer(FileTransferHeader h) throws DbException {
+		if (h.isLocal()) throw new IllegalArgumentException();
+		setTerminalStateAndSendControl(h, TRANSFER_STATE_REJECTED_BY_RECEIVER);
+	}
+
+	private void setTerminalStateAndSendControl(FileTransferHeader h,
+			String transferState) throws DbException {
+		db.transaction(false, txn -> {
+			try {
+				setTransferState(txn, h.getId(), transferState);
+				storeControlMessage(txn, h, transferState);
+				invalidateOutgoingProgressCache(h.getFileId());
+				scheduleDeleteFileDir(txn, h.getFileId());
+			} catch (FormatException e) {
+				throw new DbException(e);
+			}
+		});
+	}
+
+	private void storeControlMessage(Transaction txn, FileTransferHeader h,
+			String transferState) throws DbException, FormatException {
+		ContactId contactId = getContactId(txn, h.getGroupId());
+		int peerMinor = clientVersioningManager.getClientMinorVersion(txn,
+				contactId, CLIENT_ID, MAJOR_VERSION);
+		if (peerMinor < MINOR_VERSION) return;
+		BdfList body = BdfList.of(MSG_TYPE_CONTROL, h.getFileId().getBytes(),
+				transferState);
+		Message m = clientHelper.createMessage(h.getGroupId(), clockMillis(),
+				body);
+		clientHelper.addLocalMessage(txn, m, new BdfDictionary(), true, false);
+	}
+
+	@Override
 	public FileTransferProgress getProgress(FileTransferHeader h)
 			throws DbException {
 		if (h.isLocal()) {
@@ -832,8 +922,18 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	private FileTransferProgress getOutgoingProgress(Transaction txn,
 			FileTransferHeader h) throws DbException {
 		GroupId groupId = h.getGroupId();
-		ContactId contactId = getContactId(txn, groupId);
 		UniqueId fileId = h.getFileId();
+		try {
+			BdfDictionary headerMeta =
+					clientHelper.getMessageMetadataAsDictionary(txn, h.getId());
+			State terminal = getTerminalProgressState(headerMeta);
+			if (terminal != null) {
+				return new FileTransferProgress(terminal, 0, h.getFileSize());
+			}
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+		ContactId contactId = getContactId(txn, groupId);
 		Collection<MessageId> chunkIds = getOutgoingChunkIds(txn, groupId, fileId);
 		int transferredChunks = 0;
 		if (chunkIds.size() <= GROUP_STATUS_SCAN_THRESHOLD) {
@@ -879,6 +979,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		for (UniqueId fileId : fileIds) outgoingChunkIdCache.remove(fileId);
 	}
 
+	private void invalidateOutgoingProgressCache(UniqueId fileId) {
+		outgoingChunkIdCache.remove(fileId);
+	}
+
 	private FileTransferProgress getIncomingProgress(Transaction txn,
 			FileTransferHeader h) throws DbException {
 		UniqueId fileId = h.getFileId();
@@ -892,6 +996,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 					clientHelper.getMessageMetadataAsDictionary(txn, groupId,
 							query);
 			for (BdfDictionary hd : headers.values()) {
+				State terminal = getTerminalProgressState(hd);
+				if (terminal != null) {
+					return new FileTransferProgress(terminal, 0, h.getFileSize());
+				}
 				received = hd.getInt(MSG_KEY_CHUNKS_RECEIVED);
 			}
 		} catch (FormatException e) {

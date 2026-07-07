@@ -7,21 +7,28 @@ import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
+import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.CommitAction;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
+import org.briarproject.bramble.api.db.DbRunnable;
 import org.briarproject.bramble.api.db.EventAction;
 import org.briarproject.bramble.api.db.TaskAction;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.sync.Group;
+import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.bramble.test.BrambleMockTestCase;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
+import org.briarproject.briar.api.filetransfer.FileTransferHeader;
+import org.hamcrest.Description;
 import org.jmock.Expectations;
+import org.jmock.api.Action;
+import org.jmock.api.Invocation;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -41,8 +48,10 @@ import static org.briarproject.bramble.test.TestUtils.getGroup;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.test.TestUtils.getTestDirectory;
 import static org.briarproject.bramble.test.TestUtils.writeBytes;
+import static org.briarproject.bramble.api.client.ContactGroupConstants.GROUP_KEY_CONTACT_ID;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CLIENT_ID;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAJOR_VERSION;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MINOR_VERSION;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_INDEX;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNKS_RECEIVED;
@@ -52,9 +61,13 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_LOCAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TRANSFER_STATE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CONTROL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_CANCELLED_BY_SENDER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_REJECTED_BY_RECEIVER;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -439,6 +452,122 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testCancelFileTransferDoesNotSendControlToOldPeer()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		writeChunkFiles(fileDir);
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, true, true, false, false, 0, fileId,
+				"file.bin", "application/octet-stream", 2L, 1);
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+
+		context.checking(new Expectations() {{
+			oneOf(db).transaction(with(false), with(any(DbRunnable.class)));
+			will(runDbRunnable(txn));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
+			will(returnValue(groupMeta));
+			oneOf(clientVersioningManager).getClientMinorVersion(txn,
+					contact.getId(), CLIENT_ID, MAJOR_VERSION);
+			will(returnValue(0));
+			never(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(any(BdfList.class)));
+		}});
+
+		manager.cancelFileTransfer(header);
+
+		assertTrue(fileDir.exists());
+		runCommitTasks(txn);
+		assertFalse(fileDir.exists());
+	}
+
+	@Test
+	public void testCancelFileTransferSendsControlToMinorOnePeer()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		Message control = new Message(new MessageId(getRandomId()),
+				group.getId(), 2, new byte[] {1});
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, true, true, false, false, 0, fileId,
+				"file.bin", "application/octet-stream", 2L, 1);
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+		BdfList body = BdfList.of(MSG_TYPE_CONTROL, fileId.getBytes(),
+				TRANSFER_STATE_CANCELLED_BY_SENDER);
+
+		context.checking(new Expectations() {{
+			oneOf(db).transaction(with(false), with(any(DbRunnable.class)));
+			will(runDbRunnable(txn));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
+			will(returnValue(groupMeta));
+			oneOf(clientVersioningManager).getClientMinorVersion(txn,
+					contact.getId(), CLIENT_ID, MAJOR_VERSION);
+			will(returnValue(MINOR_VERSION));
+			oneOf(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(equal(body)));
+			will(returnValue(control));
+			oneOf(clientHelper).addLocalMessage(txn, control,
+					new BdfDictionary(), true, false);
+		}});
+
+		manager.cancelFileTransfer(header);
+	}
+
+	@Test
+	public void testRejectFileTransferSendsControlToMinorOnePeer()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		Message control = new Message(new MessageId(getRandomId()),
+				group.getId(), 2, new byte[] {1});
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, false, false, false, false, 0, fileId,
+				"file.bin", "application/octet-stream", 2L, 1);
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_REJECTED_BY_RECEIVER));
+		BdfList body = BdfList.of(MSG_TYPE_CONTROL, fileId.getBytes(),
+				TRANSFER_STATE_REJECTED_BY_RECEIVER);
+
+		context.checking(new Expectations() {{
+			oneOf(db).transaction(with(false), with(any(DbRunnable.class)));
+			will(runDbRunnable(txn));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
+			will(returnValue(groupMeta));
+			oneOf(clientVersioningManager).getClientMinorVersion(txn,
+					contact.getId(), CLIENT_ID, MAJOR_VERSION);
+			will(returnValue(MINOR_VERSION));
+			oneOf(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(equal(body)));
+			will(returnValue(control));
+			oneOf(clientHelper).addLocalMessage(txn, control,
+					new BdfDictionary(), true, false);
+		}});
+
+		manager.rejectFileTransfer(header);
+	}
+
+	@Test
 	public void testRemovingContactDeletesTransferDirectories()
 			throws Exception {
 		Transaction txn = new Transaction(null, false);
@@ -574,6 +703,23 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 				"countExistingChunks", UniqueId.class, File.class, int.class);
 		method.setAccessible(true);
 		return (Integer) method.invoke(manager, fileId, fileDir, chunkTotal);
+	}
+
+	private Action runDbRunnable(Transaction txn) {
+		return new Action() {
+			@Override
+			public Object invoke(Invocation invocation) throws Throwable {
+				DbRunnable<?> runnable =
+						(DbRunnable<?>) invocation.getParameter(1);
+				runnable.run(txn);
+				return null;
+			}
+
+			@Override
+			public void describeTo(Description description) {
+				description.appendText("runs transaction");
+			}
+		};
 	}
 
 	private void runCommitTasks(Transaction txn) {
