@@ -893,19 +893,21 @@ public class ConversationActivity extends BriarActivity
 		final String fileName = name;
 		final String contentType = mime;
 		runOnDbThread(() -> {
+			File tempFile = null;
 			try {
-				File tempFile = copyUriToTempFile(uri, fileName);
+				tempFile = copyUriToTempFile(uri, fileName);
 				FileTransferHeader header;
 				try (InputStream in = new FileInputStream(tempFile)) {
 					header = fileTransferManager.sendFile(contactId, fileName,
 							contentType, tempFile.length(), in);
 				}
-				if (!tempFile.delete()) {
-					LOG.info("Could not delete send temp file");
-				}
 				runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
 			} catch (DbException | IOException e) {
 				logException(LOG, WARNING, e);
+			} finally {
+				if (tempFile != null && !tempFile.delete()) {
+					LOG.info("Could not delete send temp file");
+				}
 			}
 		});
 	}
