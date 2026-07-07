@@ -3,6 +3,8 @@ package org.briarproject.briar.filetransfer;
 import org.briarproject.bramble.api.UniqueId;
 import org.briarproject.bramble.api.client.ClientHelper;
 import org.briarproject.bramble.api.client.ContactGroupFactory;
+import org.briarproject.bramble.api.contact.Contact;
+import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
@@ -11,6 +13,7 @@ import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
+import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
@@ -18,21 +21,32 @@ import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.bramble.test.BrambleMockTestCase;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
+import org.briarproject.briar.api.filetransfer.FileTransferHeader;
 import org.jmock.Expectations;
+import org.jmock.Sequence;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.briarproject.bramble.test.TestUtils.deleteTestDirectory;
+import static org.briarproject.bramble.test.TestUtils.getContact;
+import static org.briarproject.bramble.test.TestUtils.getGroup;
 import static org.briarproject.bramble.test.TestUtils.getTestDirectory;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.test.TestUtils.readBytes;
 import static org.briarproject.bramble.test.TestUtils.writeBytes;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUNK_SIZE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CLIENT_ID;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAJOR_VERSION;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_INDEX;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNKS_RECEIVED;
@@ -43,7 +57,9 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class FileTransferStorageTest extends BrambleMockTestCase {
 
@@ -232,6 +248,157 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		assertFalse(new File(testDir, "evil.txt").exists());
 	}
 
+	@Test
+	public void testSendFileTracksHeaderBeforeChunks() throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		Message headerMessage = new Message(new MessageId(getRandomId()),
+				group.getId(), 1, new byte[] {1});
+		Message chunkMessage = new Message(new MessageId(getRandomId()),
+				group.getId(), 2, new byte[] {2});
+		Sequence sequence = context.sequence("send-order");
+
+		expectSendSetup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(any(BdfList.class)));
+			will(returnValue(headerMessage));
+			inSequence(sequence);
+			oneOf(clientHelper).addLocalMessage(with(same(txn)),
+					with(same(headerMessage)), with(any(BdfDictionary.class)),
+					with(true), with(false));
+			inSequence(sequence);
+			oneOf(conversationManager).trackOutgoingMessage(txn, headerMessage);
+			inSequence(sequence);
+			oneOf(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(any(BdfList.class)));
+			will(returnValue(chunkMessage));
+			inSequence(sequence);
+			oneOf(clientHelper).addLocalMessage(with(same(txn)),
+					with(same(chunkMessage)), with(any(BdfDictionary.class)),
+					with(true), with(false));
+			inSequence(sequence);
+		}});
+
+		sendFile(txn, contact.getId(), "file.bin", "application/octet-stream",
+				1, new ByteArrayInputStream(new byte[] {1}));
+	}
+
+	@Test
+	public void testSendFileRejectsShortStream() throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		Message message = new Message(new MessageId(getRandomId()),
+				group.getId(), 1, new byte[] {1});
+
+		expectSendSetup(txn, contact, group);
+		expectAnyLocalMessages(txn, group, message);
+
+		try {
+			sendFile(txn, contact.getId(), "file.bin", "application/octet-stream",
+					2, new ByteArrayInputStream(new byte[] {1}));
+			fail();
+		} catch (IOException expected) {
+			assertTrue(expected.getMessage().contains("Expected 2 bytes"));
+		}
+	}
+
+	@Test
+	public void testSendFileDoesNotOverreadFinalChunk() throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		Message message = new Message(new MessageId(getRandomId()),
+				group.getId(), 1, new byte[] {1});
+		byte[] bytes = new byte[CHUNK_SIZE + 1];
+
+		expectSendSetup(txn, contact, group);
+		expectAnyLocalMessages(txn, group, message);
+
+		FileTransferHeader header = sendFile(txn, contact.getId(), "file.bin",
+				"application/octet-stream", bytes.length,
+				new StrictLengthInputStream(bytes));
+
+		assertEquals(2, header.getChunkTotal());
+	}
+
+	@Test
+	public void testSendFileCreatesEmptyAssembledFileForZeroBytes()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		Message message = new Message(new MessageId(getRandomId()),
+				group.getId(), 1, new byte[] {1});
+
+		expectSendSetup(txn, contact, group);
+		expectAnyLocalMessages(txn, group, message);
+
+		FileTransferHeader header = sendFile(txn, contact.getId(), "empty.bin",
+				"application/octet-stream", 0,
+				new ByteArrayInputStream(new byte[0]));
+
+		assertEquals(0, header.getChunkTotal());
+		InputStream in = manager.getFile(header);
+		assertNotNull(in);
+		try (InputStream i = in) {
+			assertEquals(-1, i.read());
+		}
+	}
+
+	private void expectSendSetup(Transaction txn, Contact contact, Group group)
+			throws Exception {
+		ContactId contactId = contact.getId();
+		context.checking(new Expectations() {{
+			oneOf(db).getContact(txn, contactId);
+			will(returnValue(contact));
+			oneOf(contactGroupFactory).createContactGroup(CLIENT_ID,
+					MAJOR_VERSION, contact);
+			will(returnValue(group));
+		}});
+	}
+
+	private void expectAnyLocalMessages(Transaction txn, Group group,
+			Message message) throws Exception {
+		context.checking(new Expectations() {{
+			allowing(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(any(BdfList.class)));
+			will(returnValue(message));
+			allowing(clientHelper).addLocalMessage(with(same(txn)),
+					with(same(message)), with(any(BdfDictionary.class)),
+					with(true), with(false));
+			allowing(conversationManager).trackOutgoingMessage(txn, message);
+		}});
+	}
+
+	private static class StrictLengthInputStream extends InputStream {
+
+		private final byte[] bytes;
+		private int offset = 0;
+
+		private StrictLengthInputStream(byte[] bytes) {
+			this.bytes = bytes;
+		}
+
+		@Override
+		public int read(byte[] b, int off, int len) throws IOException {
+			if (offset == bytes.length) return -1;
+			int remaining = bytes.length - offset;
+			if (len > remaining) throw new IOException("Overread final chunk");
+			System.arraycopy(bytes, offset, b, off, len);
+			offset += len;
+			return len;
+		}
+
+		@Override
+		public int read() throws IOException {
+			if (offset == bytes.length) return -1;
+			return bytes[offset++];
+		}
+	}
+
 	private File getChunkFile(File fileDir, int chunkIndex) throws Exception {
 		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
 				"getChunkFile", File.class, int.class);
@@ -300,6 +467,24 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 				BdfDictionary.class);
 		method.setAccessible(true);
 		method.invoke(manager, txn, m, meta);
+	}
+
+	private FileTransferHeader sendFile(Transaction txn, ContactId c,
+			String fileName, String contentType, long fileSize, InputStream in)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"sendFile", Transaction.class, ContactId.class, String.class,
+				String.class, long.class, InputStream.class);
+		method.setAccessible(true);
+		try {
+			return (FileTransferHeader) method.invoke(manager, txn, c, fileName,
+					contentType, fileSize, in);
+		} catch (InvocationTargetException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof Exception) throw (Exception) cause;
+			if (cause instanceof Error) throw (Error) cause;
+			throw new RuntimeException(cause);
+		}
 	}
 
 	private BdfDictionary chunkMetadata(UniqueId fileId, int chunkIndex,

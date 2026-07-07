@@ -94,13 +94,14 @@ import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
 import android.content.ContentResolver;
 import android.database.Cursor;
-import android.net.Uri;
 import android.provider.OpenableColumns;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -877,16 +878,13 @@ public class ConversationActivity extends BriarActivity
 		if (uri == null) return;
 		ContentResolver cr = getContentResolver();
 		String name = "file";
-		long size = 0;
 		String mime = cr.getType(uri);
-		try (Cursor c = cr.query(uri, new String[] {
-				OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE },
+		try (Cursor c = cr.query(uri,
+				new String[] {OpenableColumns.DISPLAY_NAME},
 				null, null, null)) {
 			if (c != null && c.moveToFirst()) {
 				String displayName = c.getString(0);
 				if (!isNullOrEmpty(displayName)) name = displayName;
-				long s = c.getLong(1);
-				if (!c.isNull(1)) size = s;
 			}
 		} catch (Exception e) {
 			logException(LOG, WARNING, e);
@@ -894,19 +892,51 @@ public class ConversationActivity extends BriarActivity
 		if (isNullOrEmpty(mime)) mime = "application/octet-stream";
 		final String fileName = name;
 		final String contentType = mime;
-		final long fileSize = size;
 		runOnDbThread(() -> {
 			try {
-				InputStream in = cr.openInputStream(uri);
-				if (in == null) throw new IOException("Could not open stream");
-				FileTransferHeader header = fileTransferManager.sendFile(
-						contactId, fileName, contentType, fileSize, in);
-				in.close();
+				File tempFile = copyUriToTempFile(uri, fileName);
+				FileTransferHeader header;
+				try (InputStream in = new FileInputStream(tempFile)) {
+					header = fileTransferManager.sendFile(contactId, fileName,
+							contentType, tempFile.length(), in);
+				}
+				if (!tempFile.delete()) {
+					LOG.info("Could not delete send temp file");
+				}
 				runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
 			} catch (DbException | IOException e) {
 				logException(LOG, WARNING, e);
 			}
 		});
+	}
+
+	private File copyUriToTempFile(Uri uri, String fileName) throws IOException {
+		File dir = new File(getCacheDir(), "filetransfer-send");
+		if (!dir.exists() && !dir.mkdirs()) throw new IOException();
+		File out = File.createTempFile("send-", "-" + sanitizeCacheName(fileName),
+				dir);
+		boolean success = false;
+		try (InputStream in = getContentResolver().openInputStream(uri);
+				OutputStream os = new FileOutputStream(out)) {
+			if (in == null) throw new IOException("Could not open stream");
+			byte[] buf = new byte[8192];
+			int n;
+			while ((n = in.read(buf)) != -1) os.write(buf, 0, n);
+			success = true;
+			return out;
+		} finally {
+			if (!success && !out.delete()) {
+				LOG.info("Could not delete incomplete send temp file");
+			}
+		}
+	}
+
+	private String sanitizeCacheName(String fileName) {
+		String name = new File(fileName).getName();
+		if (name.isEmpty() || name.equals(".") || name.equals("..")) {
+			return "file";
+		}
+		return name;
 	}
 
 	@UiThread

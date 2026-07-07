@@ -460,38 +460,11 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		if (fileSize < 0 || fileSize > MAX_FILE_SIZE) throw new IOException();
 		GroupId groupId = getContactGroup(db.getContact(txn, c)).getId();
 		UniqueId fileId = generateFileId();
-		int chunkTotal = fileSize == 0 ? 0
-				: (int) Math.ceil((double) fileSize / CHUNK_SIZE);
+		int chunkTotal = fileSize == 0 ? 0 :
+				(int) ((fileSize + CHUNK_SIZE - 1) / CHUNK_SIZE);
 		File fileDir = getFileDir(fileId);
 		long base = clockMillis();
-		byte[] buf = new byte[CHUNK_SIZE];
-		long totalRead = 0;
-		int chunkIndex = 0;
-		while (totalRead < fileSize) {
-			int n = readFully(in, buf);
-			if (n <= 0) break;
-			byte[] payload = new byte[n];
-			System.arraycopy(buf, 0, payload, 0, n);
-			long timestamp = base + chunkIndex;
-			BdfList body = BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(),
-					chunkIndex, chunkTotal, payload);
-			Message m = clientHelper.createMessage(groupId, timestamp, body);
-			BdfDictionary meta = new BdfDictionary();
-			meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
-			meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
-			meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
-			meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
-			meta.put(MSG_KEY_LOCAL, true);
-			meta.put(MSG_KEY_TIMESTAMP, timestamp);
-			clientHelper.addLocalMessage(txn, m, meta, true, false);
-			writeChunk(fileDir, chunkIndex, chunkTotal, payload);
-			chunkIndex++;
-			totalRead += n;
-		}
-		// Assemble the sender's own copy so getFile() works for the sender
-		assembleFile(fileDir, fileName, chunkTotal);
-		// Create the single header message
-		long headerTimestamp = base + chunkTotal;
+		long headerTimestamp = base;
 		BdfList headerBody = BdfList.of(MSG_TYPE_HEADER, fileId.getBytes(),
 				fileName, contentType, fileSize, chunkTotal);
 		Message headerMessage =
@@ -510,15 +483,50 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		clientHelper.addLocalMessage(txn, headerMessage, headerMeta, true,
 				false);
 		conversationManager.trackOutgoingMessage(txn, headerMessage);
+		byte[] buf = new byte[CHUNK_SIZE];
+		long totalRead = 0;
+		int chunkIndex = 0;
+		while (totalRead < fileSize) {
+			int max = (int) Math.min(CHUNK_SIZE, fileSize - totalRead);
+			int n = readFully(in, buf, max);
+			if (n < max) {
+				throw new IOException("Expected " + fileSize + " bytes but read " +
+						(totalRead + n));
+			}
+			byte[] payload = new byte[n];
+			System.arraycopy(buf, 0, payload, 0, n);
+			long timestamp = base + chunkIndex + 1;
+			BdfList body = BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(),
+					chunkIndex, chunkTotal, payload);
+			Message m = clientHelper.createMessage(groupId, timestamp, body);
+			BdfDictionary meta = new BdfDictionary();
+			meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
+			meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
+			meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
+			meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
+			meta.put(MSG_KEY_LOCAL, true);
+			meta.put(MSG_KEY_TIMESTAMP, timestamp);
+			clientHelper.addLocalMessage(txn, m, meta, true, false);
+			writeChunk(fileDir, chunkIndex, chunkTotal, payload);
+			chunkIndex++;
+			totalRead += n;
+		}
+		if (totalRead != fileSize) {
+			throw new IOException("Expected " + fileSize + " bytes but read " +
+					totalRead);
+		}
+		// Assemble the sender's own copy so getFile() works for the sender
+		assembleFile(fileDir, fileName, chunkTotal);
 		return new FileTransferHeader(headerMessage.getId(), groupId,
 				headerTimestamp, true, true, false, false, NO_AUTO_DELETE_TIMER,
 				fileId, fileName, contentType, fileSize, chunkTotal);
 	}
 
-	private int readFully(InputStream in, byte[] buf) throws IOException {
+	private int readFully(InputStream in, byte[] buf, int max)
+			throws IOException {
 		int off = 0;
-		while (off < buf.length) {
-			int n = in.read(buf, off, buf.length - off);
+		while (off < max) {
+			int n = in.read(buf, off, max - off);
 			if (n < 0) break;
 			off += n;
 		}
