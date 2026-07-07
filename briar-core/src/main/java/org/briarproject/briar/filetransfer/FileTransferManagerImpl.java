@@ -284,19 +284,30 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			if (chunkTotal == total && chunkIndex < total) matchingHeader = true;
 		}
 		if (!headers.isEmpty() && !matchingHeader) return;
-		// Write the payload to disk
-		BdfList body = clientHelper.getMessageAsList(txn, m.getId());
-		byte[] payload = body.getRaw(4);
 		File fileDir = getFileDir(fileId);
 		boolean duplicate = chunkExistsWithTotal(fileDir, chunkIndex, chunkTotal);
-		if (!duplicate) writeChunk(fileDir, chunkIndex, chunkTotal, payload);
+		boolean stored = false;
+		if (!duplicate) {
+			if (getChunkFile(fileDir, chunkIndex).exists()) return;
+			BdfList body = clientHelper.getMessageAsList(txn, m.getId());
+			byte[] payload = body.getRaw(4);
+			stored = writeChunk(fileDir, chunkIndex, chunkTotal, payload);
+		}
 		if (headers.isEmpty()) return;
 		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
 			BdfDictionary h = e.getValue();
 			int received = h.getInt(MSG_KEY_CHUNKS_RECEIVED);
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
 			if (chunkTotal != total || chunkIndex >= total) continue;
-			if (!duplicate) {
+			if (duplicate) {
+				int actualReceived = countExistingChunks(fileDir, total);
+				if (actualReceived > received) {
+					BdfDictionary merge = new BdfDictionary();
+					merge.put(MSG_KEY_CHUNKS_RECEIVED, actualReceived);
+					clientHelper.mergeMessageMetadata(txn, e.getKey(), merge);
+					received = actualReceived;
+				}
+			} else if (stored) {
 				received++;
 				BdfDictionary merge = new BdfDictionary();
 				merge.put(MSG_KEY_CHUNKS_RECEIVED, received);
@@ -406,11 +417,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		}
 	}
 
-	private void writeChunk(File fileDir, int chunkIndex, int chunkTotal,
+	private boolean writeChunk(File fileDir, int chunkIndex, int chunkTotal,
 			byte[] payload) throws DbException {
+		if (getChunkFile(fileDir, chunkIndex).exists()) return false;
 		writeBytes(getChunkFile(fileDir, chunkIndex), payload);
 		writeBytes(getChunkTotalFile(fileDir, chunkIndex),
 				Integer.toString(chunkTotal).getBytes(StandardCharsets.UTF_8));
+		return true;
 	}
 
 	@Override
