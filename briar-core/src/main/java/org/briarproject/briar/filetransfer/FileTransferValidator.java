@@ -75,20 +75,10 @@ class FileTransferValidator extends BdfMessageValidator {
 		byte[] fileId = body.getRaw(1);
 		checkLength(fileId, UniqueId.LENGTH);
 		String fileName = body.getString(2);
-		checkLength(fileName, 1, 1024);
-		if (fileName.equals(".") || fileName.equals("..") ||
-				fileName.indexOf('/') != -1 || fileName.indexOf('\\') != -1)
-			throw new FormatException();
 		String contentType = body.getString(3);
-		checkLength(contentType, 1, 1024);
 		long fileSize = body.getLong(4);
-		if (fileSize < 0) throw new FormatException();
-		if (fileSize > MAX_FILE_SIZE) throw new FormatException();
 		int chunkTotal = body.getInt(5);
-		if (chunkTotal < 0) throw new FormatException();
-		if (chunkTotal > MAX_CHUNK_TOTAL) throw new FormatException();
-		if (chunkTotal != expectedChunkTotal(fileSize))
-			throw new FormatException();
+		validateHeaderFields(fileName, contentType, fileSize, chunkTotal);
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER);
 		meta.put(MSG_KEY_FILE_ID, fileId);
@@ -101,6 +91,21 @@ class FileTransferValidator extends BdfMessageValidator {
 		meta.put(MSG_KEY_READ, false);
 		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
 		return meta;
+	}
+
+	static void validateHeaderFields(String fileName, String contentType,
+			long fileSize, int chunkTotal) throws FormatException {
+		checkLength(fileName, 1, 1024);
+		if (fileName.equals(".") || fileName.equals("..") ||
+				fileName.indexOf('/') != -1 || fileName.indexOf('\\') != -1)
+			throw new FormatException();
+		checkLength(contentType, 1, 1024);
+		if (fileSize < 0) throw new FormatException();
+		if (fileSize > MAX_FILE_SIZE) throw new FormatException();
+		if (chunkTotal < 0) throw new FormatException();
+		if (chunkTotal > MAX_CHUNK_TOTAL) throw new FormatException();
+		if (chunkTotal != expectedChunkTotal(fileSize))
+			throw new FormatException();
 	}
 
 	private BdfDictionary validateChunk(Message m, BdfList body)
@@ -128,7 +133,7 @@ class FileTransferValidator extends BdfMessageValidator {
 		return meta;
 	}
 
-	private int expectedChunkTotal(long fileSize) {
+	private static int expectedChunkTotal(long fileSize) {
 		return fileSize == 0 ? 0 :
 				(int) ((fileSize + CHUNK_SIZE - 1) / CHUNK_SIZE);
 	}

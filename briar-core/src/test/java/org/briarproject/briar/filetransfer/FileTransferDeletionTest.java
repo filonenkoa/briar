@@ -222,6 +222,80 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 		assertFalse(fileDir.exists());
 	}
 
+	@Test
+	public void testDeletingChunkDeletesOrphanChunkDirectory()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		writeChunkFiles(fileDir);
+		Map<MessageId, BdfDictionary> remaining = new HashMap<>();
+
+		expectContactGroup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, chunkId);
+			will(returnValue(chunkMetadata(fileId)));
+			oneOf(db).deleteMessage(txn, chunkId);
+			oneOf(db).deleteMessageMetadata(txn, chunkId);
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Collections.emptyList()));
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(remaining));
+			oneOf(messageTracker).resetGroupCount(txn, group.getId(), 0, 0);
+		}});
+
+		manager.deleteMessages(txn, contact.getId(),
+				Collections.singleton(chunkId));
+
+		assertTrue(fileDir.exists());
+		runCommitTasks(txn);
+
+		assertFalse(fileDir.exists());
+	}
+
+	@Test
+	public void testRemovingContactDeletesTransferDirectories()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId headerFileId = new UniqueId(getRandomId());
+		UniqueId chunkFileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		File headerFileDir = getFileDir(headerFileId);
+		File chunkFileDir = getFileDir(chunkFileId);
+		writeChunkFiles(headerFileDir);
+		writeChunkFiles(chunkFileDir);
+		Map<MessageId, BdfDictionary> metadata = new HashMap<>();
+		metadata.put(headerId, headerMetadata(headerFileId, true));
+		metadata.put(chunkId, chunkMetadata(chunkFileId));
+
+		context.checking(new Expectations() {{
+			oneOf(contactGroupFactory).createContactGroup(CLIENT_ID,
+					MAJOR_VERSION, contact);
+			will(returnValue(group));
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(metadata));
+			oneOf(db).removeGroup(txn, group);
+		}});
+
+		manager.removingContact(txn, contact);
+
+		assertTrue(headerFileDir.exists());
+		assertTrue(chunkFileDir.exists());
+		runCommitTasks(txn);
+
+		assertFalse(headerFileDir.exists());
+		assertFalse(chunkFileDir.exists());
+	}
+
 	private void expectContactGroup(Transaction txn, Contact contact, Group group)
 			throws Exception {
 		ContactId contactId = contact.getId();

@@ -26,6 +26,7 @@ import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.conversation.ConversationMessageHeader;
 import org.briarproject.briar.api.filetransfer.FileTransferHeader;
+import org.briarproject.briar.api.filetransfer.FileTransferProgress;
 import org.hamcrest.Description;
 import org.jmock.Expectations;
 import org.jmock.Sequence;
@@ -46,6 +47,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.briarproject.bramble.api.client.ContactGroupConstants.GROUP_KEY_CONTACT_ID;
 import static org.briarproject.bramble.test.TestUtils.deleteTestDirectory;
 import static org.briarproject.bramble.test.TestUtils.getContact;
 import static org.briarproject.bramble.test.TestUtils.getGroup;
@@ -134,7 +136,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		writeBytes(chunk, new byte[] {1, 2, 3});
 		writeBytes(getChunkTotalFile(fileDir, 0), new byte[] {'2'});
 
-		assembleFile(fileDir, "file.bin", 2);
+		assembleFile(fileDir, "file.bin", 2, 3);
 
 		assertFalse(getAssembledFile(fileDir, "file.bin").exists());
 	}
@@ -194,10 +196,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		File fileDir = getFileDir(fileId);
 		writeChunk(fileDir, 0, 2, new byte[] {1, 2, 3});
 
-		BdfDictionary header = new BdfDictionary();
-		header.put(MSG_KEY_FILE_NAME, "file.bin");
-		header.put(MSG_KEY_CHUNK_TOTAL, 2);
-		header.put(MSG_KEY_CHUNKS_RECEIVED, 0);
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 4L, 2, 0);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
 		headers.put(headerMessageId, header);
 		BdfDictionary repair = BdfDictionary.of(new BdfEntry(
@@ -234,6 +233,45 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testCorrectChunkReplacesWrongTotalOrphanAfterHeader()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 1,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 3, new byte[] {9});
+
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 4L, 2, 0);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary received = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+		BdfDictionary meta = chunkMetadata(fileId, 0, 2);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			oneOf(clientHelper).getMessageAsList(txn, chunkMessageId);
+			will(returnValue(BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(), 0, 2,
+					new byte[] {1, 2})));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerMessageId,
+					received);
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		assertArrayEquals(new byte[] {1, 2}, readBytes(getChunkFile(fileDir, 0)));
+		assertEquals(1, countExistingChunks(fileDir, 2));
+		assertEquals(0, countExistingChunks(fileDir, 3));
+	}
+
+	@Test
 	public void testOrphanChunkWithoutTotalIsRecoverable()
 			throws Exception {
 		File fileDir = new File(testDir, "orphan");
@@ -256,12 +294,54 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		File fileDir = new File(testDir, "zero");
 		assertTrue(fileDir.mkdirs());
 
-		assembleFile(fileDir, "../evil.txt", 0);
+		assembleFile(fileDir, "../evil.txt", 0, 0);
 
 		File assembled = getAssembledFile(fileDir, "evil.txt");
 		assertTrue(assembled.exists());
 		assertEquals(0, assembled.length());
 		assertFalse(new File(testDir, "evil.txt").exists());
+	}
+
+	@Test
+	public void testAssemblyDeletesTempAndDoesNotCompleteIfSizeIsWrong()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 1,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 2, new byte[] {1, 2});
+
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 5L, 2, 1);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary meta = chunkMetadata(fileId, 1, 2);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			oneOf(clientHelper).getMessageAsList(txn, chunkMessageId);
+			will(returnValue(BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(), 1, 2,
+					new byte[] {3, 4})));
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					headerMessageId);
+			will(returnValue(header));
+			never(clientHelper).mergeMessageMetadata(with(same(txn)),
+					with(equal(headerMessageId)), with(any(BdfDictionary.class)));
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		File assembled = getAssembledFile(fileDir, "file.bin");
+		assertFalse(assembled.exists());
+		assertFalse(new File(assembled.getParentFile(), "file.bin.tmp").exists());
+		assertTrue(getChunkFile(fileDir, 0).exists());
+		assertTrue(getChunkFile(fileDir, 1).exists());
 	}
 
 	@Test
@@ -271,7 +351,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		writeChunk(fileDir, 0, 2, new byte[] {1, 2});
 		writeChunk(fileDir, 1, 2, new byte[] {3, 4});
 
-		assembleFile(fileDir, "file.bin", 2);
+		assembleFile(fileDir, "file.bin", 2, 4);
 
 		File assembled = getAssembledFile(fileDir, "file.bin");
 		assertTrue(assembled.exists());
@@ -294,12 +374,9 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 				new byte[] {1});
 		File fileDir = getFileDir(fileId);
 		writeChunk(fileDir, 0, 1, new byte[] {1, 2, 3});
-		assembleFile(fileDir, "file.bin", 1);
+		assembleFile(fileDir, "file.bin", 1, 3);
 
-		BdfDictionary header = new BdfDictionary();
-		header.put(MSG_KEY_FILE_NAME, "file.bin");
-		header.put(MSG_KEY_CHUNK_TOTAL, 1);
-		header.put(MSG_KEY_CHUNKS_RECEIVED, 1);
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 3L, 1, 1);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
 		headers.put(headerMessageId, header);
 		BdfDictionary meta = chunkMetadata(fileId, 0, 1);
@@ -336,10 +413,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		assertTrue(tmp.getParentFile().mkdirs());
 		writeBytes(tmp, new byte[] {9});
 
-		BdfDictionary header = new BdfDictionary();
-		header.put(MSG_KEY_FILE_NAME, "file.bin");
-		header.put(MSG_KEY_CHUNK_TOTAL, 2);
-		header.put(MSG_KEY_CHUNKS_RECEIVED, 0);
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 6L, 2, 0);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
 		headers.put(headerMessageId, header);
 		BdfDictionary repair = BdfDictionary.of(new BdfEntry(
@@ -379,10 +453,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		assertTrue(assembled.getParentFile().mkdirs());
 		writeBytes(assembled, new byte[] {1, 2, 3});
 
-		BdfDictionary header = new BdfDictionary();
-		header.put(MSG_KEY_FILE_NAME, "file.bin");
-		header.put(MSG_KEY_CHUNK_TOTAL, 1);
-		header.put(MSG_KEY_CHUNKS_RECEIVED, 0);
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 3L, 1, 0);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
 		headers.put(headerMessageId, header);
 		BdfDictionary repair = BdfDictionary.of(new BdfEntry(
@@ -440,6 +511,37 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 
 		sendFile(txn, contact.getId(), "file.bin", "application/octet-stream",
 				1, new ByteArrayInputStream(new byte[] {1}));
+	}
+
+	@Test
+	public void testSendFileRejectsUnsafeFileNameBeforeCreatingHeader()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+
+		try {
+			sendFile(txn, contact.getId(), "../evil.txt",
+					"application/octet-stream", 0,
+					new ByteArrayInputStream(new byte[0]));
+			fail();
+		} catch (IOException expected) {
+			// Expected.
+		}
+	}
+
+	@Test
+	public void testSendFileRejectsEmptyContentTypeBeforeCreatingHeader()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+
+		try {
+			sendFile(txn, contact.getId(), "file.bin", "", 0,
+					new ByteArrayInputStream(new byte[0]));
+			fail();
+		} catch (IOException expected) {
+			// Expected.
+		}
 	}
 
 	@Test
@@ -638,6 +740,39 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testOutgoingProgressCachesChunkIds() throws Exception {
+		Transaction txn = new Transaction(null, true);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, true, true, false, false, 0, fileId,
+				"file.bin", "application/octet-stream", 1, 1);
+
+		context.checking(new Expectations() {{
+			allowing(clientHelper).getGroupMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(groupMeta));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Arrays.asList(chunkId)));
+			exactly(2).of(db).getMessageStatus(txn, contact.getId(), chunkId);
+			will(returnValue(new MessageStatus(chunkId, contact.getId(), true,
+					true)));
+		}});
+
+		FileTransferProgress p1 = getOutgoingProgress(txn, header);
+		FileTransferProgress p2 = getOutgoingProgress(txn, header);
+
+		assertEquals(FileTransferProgress.State.COMPLETE, p1.getState());
+		assertEquals(FileTransferProgress.State.COMPLETE, p2.getState());
+	}
+
+	@Test
 	public void testGetMessageHeadersDefaultsLegacyReadMetadata()
 			throws Exception {
 		Transaction txn = new Transaction(null, false);
@@ -798,12 +933,13 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		return (String) method.invoke(manager, fileName);
 	}
 
-	private void assembleFile(File fileDir, String fileName, int chunkTotal)
+	private void assembleFile(File fileDir, String fileName, int chunkTotal,
+			long expectedSize)
 			throws Exception {
 		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
-				"assembleFile", File.class, String.class, int.class);
+				"assembleFile", File.class, String.class, int.class, long.class);
 		method.setAccessible(true);
-		method.invoke(manager, fileDir, fileName, chunkTotal);
+		method.invoke(manager, fileDir, fileName, chunkTotal, expectedSize);
 	}
 
 	private void writeChunk(File fileDir, int chunkIndex, int chunkTotal,
@@ -851,6 +987,22 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		return meta;
 	}
 
+	private BdfDictionary headerMetadata(UniqueId fileId, String fileName,
+			long fileSize, int chunkTotal, int chunksReceived) {
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER);
+		meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
+		meta.put(MSG_KEY_FILE_NAME, fileName);
+		meta.put(MSG_KEY_CONTENT_TYPE, "application/octet-stream");
+		meta.put(MSG_KEY_FILE_SIZE, fileSize);
+		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
+		meta.put(MSG_KEY_CHUNKS_RECEIVED, chunksReceived);
+		meta.put(MSG_KEY_LOCAL, false);
+		meta.put(MSG_KEY_READ, false);
+		meta.put(MSG_KEY_TIMESTAMP, 1L);
+		return meta;
+	}
+
 	private BdfDictionary legacyHeaderMetadata(UniqueId fileId, boolean local) {
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER);
@@ -887,5 +1039,14 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 				"recalculateGroupCount", Transaction.class, GroupId.class);
 		method.setAccessible(true);
 		method.invoke(manager, txn, groupId);
+	}
+
+	private FileTransferProgress getOutgoingProgress(Transaction txn,
+			FileTransferHeader header) throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getOutgoingProgress", Transaction.class,
+				FileTransferHeader.class);
+		method.setAccessible(true);
+		return (FileTransferProgress) method.invoke(manager, txn, header);
 	}
 }
