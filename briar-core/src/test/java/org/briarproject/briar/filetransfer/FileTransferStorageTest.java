@@ -72,11 +72,44 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 			throws Exception {
 		File fileDir = new File(testDir, "missing");
 		assertTrue(fileDir.mkdirs());
-		writeBytes(new File(fileDir, "chunk_0"), new byte[] {1, 2, 3});
+		File chunk = getChunkFile(fileDir, 0);
+		assertTrue(chunk.getParentFile().exists() ||
+				chunk.getParentFile().mkdirs());
+		writeBytes(chunk, new byte[] {1, 2, 3});
 
 		assembleFile(fileDir, "file.bin", 2);
 
 		assertFalse(new File(fileDir, "file.bin").exists());
+	}
+
+	@Test
+	public void testAssembledFileDoesNotCollideWithChunkFile()
+			throws Exception {
+		File fileDir = new File(testDir, "collision");
+		assertTrue(fileDir.mkdirs());
+
+		File chunk = getChunkFile(fileDir, 0);
+		File assembled = getAssembledFile(fileDir, "chunk_0");
+
+		assertFalse(chunk.equals(assembled));
+		assertEquals("chunks", chunk.getParentFile().getName());
+		assertEquals("assembled", assembled.getParentFile().getName());
+	}
+
+	@Test
+	public void testCountExistingChunksIgnoresWrongChunkTotal()
+			throws Exception {
+		File fileDir = new File(testDir, "totals");
+		assertTrue(fileDir.mkdirs());
+		File chunk = getChunkFile(fileDir, 0);
+		assertTrue(chunk.getParentFile().exists() ||
+				chunk.getParentFile().mkdirs());
+		writeBytes(chunk, new byte[] {1, 2, 3});
+		writeBytes(new File(chunk.getParentFile(), chunk.getName() + ".total"),
+				new byte[] {'3'});
+
+		assertEquals(0, countExistingChunks(fileDir, 2));
+		assertEquals(1, countExistingChunks(fileDir, 3));
 	}
 
 	@Test
@@ -86,10 +119,33 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 
 		assembleFile(fileDir, "../evil.txt", 0);
 
-		File assembled = new File(fileDir, "evil.txt");
+		File assembled = getAssembledFile(fileDir, "evil.txt");
 		assertTrue(assembled.exists());
 		assertEquals(0, assembled.length());
 		assertFalse(new File(testDir, "evil.txt").exists());
+	}
+
+	private File getChunkFile(File fileDir, int chunkIndex) throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getChunkFile", File.class, int.class);
+		method.setAccessible(true);
+		return (File) method.invoke(manager, fileDir, chunkIndex);
+	}
+
+	private File getAssembledFile(File fileDir, String fileName)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getAssembledFile", File.class, String.class);
+		method.setAccessible(true);
+		return (File) method.invoke(manager, fileDir, fileName);
+	}
+
+	private int countExistingChunks(File fileDir, int chunkTotal)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"countExistingChunks", File.class, int.class);
+		method.setAccessible(true);
+		return (Integer) method.invoke(manager, fileDir, chunkTotal);
 	}
 
 	private String safeFileName(String fileName) throws Exception {

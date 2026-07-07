@@ -52,6 +52,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -135,12 +136,25 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 				StringUtils.toHexString(fileId.getBytes()));
 	}
 
+	private File getChunksDir(File fileDir) {
+		return new File(fileDir, "chunks");
+	}
+
+	private File getAssembledDir(File fileDir) {
+		return new File(fileDir, "assembled");
+	}
+
 	private File getChunkFile(File fileDir, int chunkIndex) {
-		return new File(fileDir, "chunk_" + chunkIndex);
+		return new File(getChunksDir(fileDir), "chunk_" + chunkIndex);
+	}
+
+	private File getChunkTotalFile(File fileDir, int chunkIndex) {
+		File chunk = getChunkFile(fileDir, chunkIndex);
+		return new File(chunk.getParentFile(), chunk.getName() + ".total");
 	}
 
 	private File getAssembledFile(File fileDir, String fileName) {
-		return new File(fileDir, fileName);
+		return new File(getAssembledDir(fileDir), fileName);
 	}
 
 	private String safeFileName(String fileName) {
@@ -154,9 +168,31 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	private int countExistingChunks(File fileDir, int chunkTotal) {
 		int count = 0;
 		for (int i = 0; i < chunkTotal; i++) {
-			if (getChunkFile(fileDir, i).exists()) count++;
+			if (chunkExistsWithTotal(fileDir, i, chunkTotal)) count++;
 		}
 		return count;
+	}
+
+	private boolean chunkExistsWithTotal(File fileDir, int chunkIndex,
+			int chunkTotal) {
+		if (!getChunkFile(fileDir, chunkIndex).exists()) return false;
+		File totalFile = getChunkTotalFile(fileDir, chunkIndex);
+		if (!totalFile.exists()) return false;
+		try (InputStream is = new FileInputStream(totalFile)) {
+			if (totalFile.length() <= 0 || totalFile.length() > 16) return false;
+			byte[] bytes = new byte[(int) totalFile.length()];
+			int off = 0;
+			while (off < bytes.length) {
+				int read = is.read(bytes, off, bytes.length - off);
+				if (read == -1) return false;
+				off += read;
+			}
+			if (is.read() != -1) return false;
+			String total = new String(bytes, StandardCharsets.UTF_8);
+			return Integer.parseInt(total) == chunkTotal;
+		} catch (IOException | NumberFormatException e) {
+			return false;
+		}
 	}
 
 	private UniqueId generateFileId() {
@@ -252,10 +288,8 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		BdfList body = clientHelper.getMessageAsList(txn, m.getId());
 		byte[] payload = body.getRaw(4);
 		File fileDir = getFileDir(fileId);
-		fileDir.mkdirs();
-		File chunk = getChunkFile(fileDir, chunkIndex);
-		boolean duplicate = chunk.exists();
-		if (!duplicate) writeBytes(chunk, payload);
+		boolean duplicate = chunkExistsWithTotal(fileDir, chunkIndex, chunkTotal);
+		if (!duplicate) writeChunk(fileDir, chunkIndex, chunkTotal, payload);
 		if (headers.isEmpty()) return;
 		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
 			BdfDictionary h = e.getValue();
@@ -263,13 +297,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
 			if (chunkTotal != total || chunkIndex >= total) continue;
 			if (!duplicate) {
-				int actualReceived = countExistingChunks(fileDir, total);
-				if (actualReceived > received) {
-					BdfDictionary merge = new BdfDictionary();
-					merge.put(MSG_KEY_CHUNKS_RECEIVED, actualReceived);
-					clientHelper.mergeMessageMetadata(txn, e.getKey(), merge);
-					received = actualReceived;
-				}
+				received++;
+				BdfDictionary merge = new BdfDictionary();
+				merge.put(MSG_KEY_CHUNKS_RECEIVED, received);
+				clientHelper.mergeMessageMetadata(txn, e.getKey(), merge);
 			}
 			if (received >= total) {
 				tryAssemble(txn, groupId, fileId, e.getKey());
@@ -325,18 +356,21 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		File out = getAssembledFile(fileDir, safeName);
 		if (out.exists()) return;
 		try {
-			if (!fileDir.exists() && !fileDir.mkdirs()) throw new IOException();
+			File assembledDir = out.getParentFile();
+			if (!assembledDir.exists() && !assembledDir.mkdirs()) {
+				throw new IOException();
+			}
 			if (chunkTotal == 0) {
 				if (!out.exists() && !out.createNewFile()) throw new IOException();
 				return;
 			}
 			for (int i = 0; i < chunkTotal; i++) {
-				if (!getChunkFile(fileDir, i).exists()) return;
+				if (!chunkExistsWithTotal(fileDir, i, chunkTotal)) return;
 			}
 		} catch (IOException e) {
 			throw new DbException(e);
 		}
-		File tmp = new File(fileDir, safeName + ".tmp");
+		File tmp = new File(out.getParentFile(), safeName + ".tmp");
 		try (OutputStream os = new FileOutputStream(tmp)) {
 			for (int i = 0; i < chunkTotal; i++) {
 				File chunk = getChunkFile(fileDir, i);
@@ -361,11 +395,22 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	}
 
 	private void writeBytes(File file, byte[] bytes) throws DbException {
+		File dir = file.getParentFile();
+		if (dir != null && !dir.exists() && !dir.mkdirs()) {
+			throw new DbException();
+		}
 		try (OutputStream os = new FileOutputStream(file)) {
 			os.write(bytes);
 		} catch (IOException e) {
 			throw new DbException(e);
 		}
+	}
+
+	private void writeChunk(File fileDir, int chunkIndex, int chunkTotal,
+			byte[] payload) throws DbException {
+		writeBytes(getChunkFile(fileDir, chunkIndex), payload);
+		writeBytes(getChunkTotalFile(fileDir, chunkIndex),
+				Integer.toString(chunkTotal).getBytes(StandardCharsets.UTF_8));
 	}
 
 	@Override
@@ -385,7 +430,6 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		int chunkTotal = fileSize == 0 ? 0
 				: (int) Math.ceil((double) fileSize / CHUNK_SIZE);
 		File fileDir = getFileDir(fileId);
-		fileDir.mkdirs();
 		long base = clockMillis();
 		byte[] buf = new byte[CHUNK_SIZE];
 		long totalRead = 0;
@@ -407,7 +451,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			meta.put(MSG_KEY_LOCAL, true);
 			meta.put(MSG_KEY_TIMESTAMP, timestamp);
 			clientHelper.addLocalMessage(txn, m, meta, true, false);
-			writeBytes(getChunkFile(fileDir, chunkIndex), payload);
+			writeChunk(fileDir, chunkIndex, chunkTotal, payload);
 			chunkIndex++;
 			totalRead += n;
 		}
@@ -458,7 +502,8 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			throws DbException, IOException {
 		UniqueId fileId = h.getFileId();
 		File fileDir = getFileDir(fileId);
-		File assembled = getAssembledFile(fileDir, safeFileName(h.getFileName()));
+		File assembled =
+				getAssembledFile(fileDir, safeFileName(h.getFileName()));
 		if (!assembled.exists()) return null;
 		return new FileInputStream(assembled);
 	}
