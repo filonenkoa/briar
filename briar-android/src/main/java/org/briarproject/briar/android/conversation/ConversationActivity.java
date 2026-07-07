@@ -155,6 +155,7 @@ import static org.briarproject.bramble.util.LogUtils.now;
 import static org.briarproject.bramble.util.StringUtils.fromHexString;
 import static org.briarproject.bramble.util.StringUtils.isNullOrEmpty;
 import static org.briarproject.bramble.util.StringUtils.join;
+import static org.briarproject.bramble.util.StringUtils.toHexString;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_INTRODUCTION;
 import static org.briarproject.briar.android.conversation.ImageActivity.ATTACHMENTS;
 import static org.briarproject.briar.android.conversation.ImageActivity.ATTACHMENT_POSITION;
@@ -183,6 +184,8 @@ public class ConversationActivity extends BriarActivity
 
 	private static final int TRANSITION_DURATION_MS = 500;
 	private static final int ONBOARDING_DELAY_MS = 250;
+	private static final long FILE_TRANSFER_OPEN_CACHE_MAX_AGE_MS =
+			24 * 60 * 60 * 1000L;
 
 	@Inject
 	AndroidNotificationManager notificationManager;
@@ -838,21 +841,13 @@ public class ConversationActivity extends BriarActivity
 	private void openFile(FileTransferHeader h) {
 		runOnDbThread(() -> {
 			try {
-				InputStream in = fileTransferManager.getFile(h);
-				if (in == null) {
-					showFileOpenError(R.string.file_transfer_open_failed);
-					return;
-				}
 				File dir = new File(getCacheDir(), "filetransfer");
 				if (!dir.exists() && !dir.mkdirs()) throw new IOException();
-				deleteOldCacheFiles(dir, 24 * 60 * 60 * 1000L);
-				File out = File.createTempFile("open-",
-						"-" + sanitizeCacheName(h.getFileName()), dir);
-				try (InputStream i = in;
-						FileOutputStream fos = new FileOutputStream(out)) {
-					byte[] buf = new byte[8192];
-					int read;
-					while ((read = i.read(buf)) != -1) fos.write(buf, 0, read);
+				deleteOldCacheFiles(dir, FILE_TRANSFER_OPEN_CACHE_MAX_AGE_MS);
+				File out = getOpenCacheFile(dir, h);
+				if (!isFreshOpenCacheFile(out, h) &&
+						!copyFileTransferToCache(h, out)) {
+					return;
 				}
 				String mime = h.getContentType();
 				if (isNullOrEmpty(mime)) mime = "application/octet-stream";
@@ -874,6 +869,46 @@ public class ConversationActivity extends BriarActivity
 				showFileOpenError(R.string.file_transfer_open_error);
 			}
 		});
+	}
+
+	private boolean copyFileTransferToCache(FileTransferHeader h, File out)
+			throws DbException, IOException {
+		File tmp = new File(out.getPath() + ".tmp");
+		boolean success = false;
+		try {
+			InputStream in = fileTransferManager.getFile(h);
+			if (in == null) {
+				showFileOpenError(R.string.file_transfer_open_failed);
+				return false;
+			}
+			try (InputStream i = in;
+					FileOutputStream fos = new FileOutputStream(tmp)) {
+				byte[] buf = new byte[8192];
+				int read;
+				while ((read = i.read(buf)) != -1) fos.write(buf, 0, read);
+			}
+			if (out.exists() && !out.delete()) throw new IOException();
+			if (!tmp.renameTo(out)) throw new IOException();
+			success = true;
+			return true;
+		} finally {
+			if (!success && tmp.exists() && !tmp.delete()) {
+				LOG.info("Could not delete incomplete open cache file");
+			}
+		}
+	}
+
+	private File getOpenCacheFile(File dir, FileTransferHeader h) {
+		String id = toHexString(h.getFileId().getBytes());
+		return new File(dir, "open-" + id + "-" +
+				sanitizeCacheName(h.getFileName()));
+	}
+
+	private boolean isFreshOpenCacheFile(File f, FileTransferHeader h) {
+		long cutoff = System.currentTimeMillis() -
+				FILE_TRANSFER_OPEN_CACHE_MAX_AGE_MS;
+		return f.exists() && f.length() == h.getFileSize() &&
+				f.lastModified() >= cutoff;
 	}
 
 	private void showFileOpenError(int stringRes) {
@@ -917,6 +952,7 @@ public class ConversationActivity extends BriarActivity
 		if (size > MAX_FILE_SIZE) {
 			logException(LOG, WARNING,
 					new IOException("File is larger than maximum size"));
+			showFileSendError();
 			return;
 		}
 		if (isNullOrEmpty(mime)) mime = "application/octet-stream";
@@ -934,14 +970,18 @@ public class ConversationActivity extends BriarActivity
 				runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
 			} catch (DbException | IOException e) {
 				logException(LOG, WARNING, e);
-				runOnUiThreadUnlessDestroyed(() -> Toast.makeText(this,
-						R.string.file_transfer_send_error, LENGTH_LONG).show());
+				showFileSendError();
 			} finally {
 				if (tempFile != null && !tempFile.delete()) {
 					LOG.info("Could not delete send temp file");
 				}
 			}
 		});
+	}
+
+	private void showFileSendError() {
+		runOnUiThreadUnlessDestroyed(() -> Toast.makeText(this,
+				R.string.file_transfer_send_error, LENGTH_LONG).show());
 	}
 
 	private File copyUriToTempFile(Uri uri, String fileName) throws IOException {
