@@ -2,6 +2,7 @@ package org.briarproject.briar.android.conversation;
 
 import android.annotation.SuppressLint;
 import android.content.ActivityNotFoundException;
+import android.content.res.ColorStateList;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
@@ -36,8 +37,13 @@ import org.briarproject.bramble.api.db.NoSuchContactException;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
+import org.briarproject.bramble.api.plugin.BluetoothConstants;
+import org.briarproject.bramble.api.plugin.LanTcpConstants;
+import org.briarproject.bramble.api.plugin.TorConstants;
 import org.briarproject.bramble.api.plugin.event.ContactConnectedEvent;
 import org.briarproject.bramble.api.plugin.event.ContactDisconnectedEvent;
+import org.briarproject.bramble.api.plugin.event.ConnectionClosedEvent;
+import org.briarproject.bramble.api.plugin.event.ConnectionOpenedEvent;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.sync.event.MessagesAckedEvent;
@@ -126,6 +132,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.core.app.ActivityOptionsCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
+import androidx.core.widget.ImageViewCompat;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
@@ -159,6 +166,9 @@ import static org.briarproject.bramble.util.StringUtils.isNullOrEmpty;
 import static org.briarproject.bramble.util.StringUtils.join;
 import static org.briarproject.bramble.util.StringUtils.toHexString;
 import static org.briarproject.briar.android.activity.RequestCodes.REQUEST_INTRODUCTION;
+import static org.briarproject.briar.android.conversation.ChatTransportState.Transport.BLUETOOTH;
+import static org.briarproject.briar.android.conversation.ChatTransportState.Transport.INTERNET;
+import static org.briarproject.briar.android.conversation.ChatTransportState.Transport.WIFI;
 import static org.briarproject.briar.android.conversation.ImageActivity.ATTACHMENTS;
 import static org.briarproject.briar.android.conversation.ImageActivity.ATTACHMENT_POSITION;
 import static org.briarproject.briar.android.conversation.ImageActivity.DATE;
@@ -242,6 +252,13 @@ public class ConversationActivity extends BriarActivity
 	private CircleImageView toolbarAvatar;
 	private ImageView toolbarStatus;
 	private TextView toolbarTitle;
+	private View transportStatus;
+	private ImageView transportInternet;
+	private ImageView transportWifi;
+	private ImageView transportBluetooth;
+	private ColorStateList transportActiveTint;
+	private ColorStateList transportInactiveTint;
+	private ChatTransportState transportState = ChatTransportState.empty();
 	private BriarRecyclerView list;
 	private LinearLayoutManager layoutManager;
 	private TextInputView textInputView;
@@ -285,6 +302,17 @@ public class ConversationActivity extends BriarActivity
 		toolbarAvatar = toolbar.findViewById(R.id.contactAvatar);
 		toolbarStatus = toolbar.findViewById(R.id.contactStatus);
 		toolbarTitle = toolbar.findViewById(R.id.contactName);
+		transportStatus = toolbar.findViewById(R.id.transportStatus);
+		transportInternet = toolbar.findViewById(R.id.transportInternet);
+		transportWifi = toolbar.findViewById(R.id.transportWifi);
+		transportBluetooth = toolbar.findViewById(R.id.transportBluetooth);
+		transportActiveTint = ColorStateList.valueOf(ContextCompat.getColor(this,
+				R.color.action_bar_text));
+		transportInactiveTint = ColorStateList.valueOf(ContextCompat.getColor(this,
+				R.color.briar_gray_300));
+		transportStatus.setOnClickListener(v -> Toast.makeText(this,
+				getTransportStatusText(), LENGTH_SHORT).show());
+		displayTransportStatus();
 
 		viewModel.getContactItem().observe(this, contactItem -> {
 			requireNonNull(contactItem);
@@ -367,6 +395,7 @@ public class ConversationActivity extends BriarActivity
 		notificationManager.blockContactNotification(contactId);
 		notificationManager.clearContactNotification(contactId);
 		displayContactOnlineStatus();
+		displayTransportStatus();
 		viewModel.getContactDisplayName().observe(this, contactNameObserver);
 		list.startPeriodicUpdate();
 	}
@@ -565,6 +594,46 @@ public class ConversationActivity extends BriarActivity
 		}
 	}
 
+	@UiThread
+	private void displayTransportStatus() {
+		transportState = ChatTransportState.empty()
+				.withTransport(TorConstants.ID, connectionRegistry.isConnected(
+						contactId, TorConstants.ID))
+				.withTransport(LanTcpConstants.ID, connectionRegistry.isConnected(
+						contactId, LanTcpConstants.ID))
+				.withTransport(BluetoothConstants.ID, connectionRegistry.isConnected(
+						contactId, BluetoothConstants.ID));
+		renderTransportStatus();
+	}
+
+	@UiThread
+	private void renderTransportStatus() {
+		setTransportTint(transportInternet, transportState.isActive(INTERNET));
+		setTransportTint(transportWifi, transportState.isActive(WIFI));
+		setTransportTint(transportBluetooth, transportState.isActive(BLUETOOTH));
+		transportStatus.setContentDescription(getTransportStatusText());
+	}
+
+	@UiThread
+	private void setTransportTint(ImageView view, boolean active) {
+		ImageViewCompat.setImageTintList(view,
+				active ? transportActiveTint : transportInactiveTint);
+	}
+
+	private String getTransportStatusText() {
+		String internet = getString(transportState.isActive(INTERNET) ?
+				R.string.transport_status_internet_active :
+				R.string.transport_status_internet_inactive);
+		String wifi = getString(transportState.isActive(WIFI) ?
+				R.string.transport_status_wifi_active :
+				R.string.transport_status_wifi_inactive);
+		String bluetooth = getString(transportState.isActive(BLUETOOTH) ?
+				R.string.transport_status_bluetooth_active :
+				R.string.transport_status_bluetooth_inactive);
+		return getString(R.string.transport_status_summary, internet, wifi,
+				bluetooth);
+	}
+
 	private void loadMessages() {
 		int revision = adapter.getRevision();
 		runOnDbThread(() -> {
@@ -748,6 +817,24 @@ public class ConversationActivity extends BriarActivity
 			if (m.getContactId().equals(contactId)) {
 				LOG.info("Messages auto-deleted");
 				onConversationMessagesDeleted(m.getMessageIds());
+			}
+		} else if (e instanceof ConnectionOpenedEvent) {
+			ConnectionOpenedEvent c = (ConnectionOpenedEvent) e;
+			if (c.getContactId().equals(contactId)) {
+				runOnUiThreadUnlessDestroyed(() -> {
+					transportState = transportState.withTransport(
+							c.getTransportId(), true);
+					renderTransportStatus();
+				});
+			}
+		} else if (e instanceof ConnectionClosedEvent) {
+			ConnectionClosedEvent c = (ConnectionClosedEvent) e;
+			if (c.getContactId().equals(contactId)) {
+				runOnUiThreadUnlessDestroyed(() -> {
+					transportState = transportState.withTransport(
+							c.getTransportId(), false);
+					renderTransportStatus();
+				});
 			}
 		} else if (e instanceof ContactConnectedEvent) {
 			ContactConnectedEvent c = (ContactConnectedEvent) e;
