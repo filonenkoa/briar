@@ -944,5 +944,6 @@
 	<string name="file_transfer_open">Open file</string>
 	<string name="file_transfer_open_error">Could not open file</string>
 	<string name="file_transfer_open_failed">File not available yet</string>
+	<string name="file_transfer_send_error">Could not send file</string>
 
 </resources>

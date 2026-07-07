@@ -532,7 +532,7 @@
 
 	<provider
 		android:name="androidx.core.content.FileProvider"
-		android:authorities="org.briarproject.briar.android.fileprovider"
+		android:authorities="${applicationId}.fileprovider"
 		android:exported="false"
 		android:grantUriPermissions="true">
 		<meta-data

@@ -1,6 +1,7 @@
 package org.briarproject.briar.android.conversation;
 
 import android.annotation.SuppressLint;
+import android.content.ActivityNotFoundException;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
@@ -42,6 +43,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.api.sync.event.MessagesAckedEvent;
 import org.briarproject.bramble.api.sync.event.MessagesSentEvent;
 import org.briarproject.bramble.api.versioning.event.ClientVersionUpdatedEvent;
+import org.briarproject.briar.BuildConfig;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.activity.ActivityComponent;
 import org.briarproject.briar.android.activity.BriarActivity;
@@ -137,6 +139,7 @@ import de.hdodenhof.circleimageview.CircleImageView;
 import uk.co.samuelwall.materialtaptargetprompt.MaterialTapTargetPrompt;
 
 import static android.view.Gravity.RIGHT;
+import static android.widget.Toast.LENGTH_LONG;
 import static android.widget.Toast.LENGTH_SHORT;
 import static androidx.core.app.ActivityOptionsCompat.makeSceneTransitionAnimation;
 import static androidx.lifecycle.Lifecycle.State.STARTED;
@@ -841,9 +844,10 @@ public class ConversationActivity extends BriarActivity
 					return;
 				}
 				File dir = new File(getCacheDir(), "filetransfer");
-				//noinspection ResultOfMethodCallIgnored
-				dir.mkdirs();
-				File out = new File(dir, sanitizeFileName(h.getFileName()));
+				if (!dir.exists() && !dir.mkdirs()) throw new IOException();
+				deleteOldCacheFiles(dir, 24 * 60 * 60 * 1000L);
+				File out = File.createTempFile("open-",
+						"-" + sanitizeCacheName(h.getFileName()), dir);
 				try (InputStream i = in;
 						FileOutputStream fos = new FileOutputStream(out)) {
 					byte[] buf = new byte[8192];
@@ -853,11 +857,18 @@ public class ConversationActivity extends BriarActivity
 				String mime = h.getContentType();
 				if (isNullOrEmpty(mime)) mime = "application/octet-stream";
 				Uri uri = FileProvider.getUriForFile(this,
-						"org.briarproject.briar.android.fileprovider", out);
+						BuildConfig.APPLICATION_ID + ".fileprovider", out);
 				Intent intent = new Intent(Intent.ACTION_VIEW);
 				intent.setDataAndType(uri, mime);
 				intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-				runOnUiThreadUnlessDestroyed(() -> startActivity(intent));
+				runOnUiThreadUnlessDestroyed(() -> {
+					try {
+						startActivity(intent);
+					} catch (ActivityNotFoundException e) {
+						Toast.makeText(this, R.string.file_transfer_open_error,
+								LENGTH_LONG).show();
+					}
+				});
 			} catch (DbException | IOException e) {
 				logException(LOG, WARNING, e);
 				showFileOpenError(R.string.file_transfer_open_error);
@@ -870,11 +881,15 @@ public class ConversationActivity extends BriarActivity
 				.makeText(this, stringRes, LENGTH_SHORT).show());
 	}
 
-	@Nullable
-	private static String sanitizeFileName(@Nullable String name) {
-		if (isNullOrEmpty(name)) return "file";
-		String n = name.replaceAll("[/\\\\]", "_");
-		return n.isEmpty() ? "file" : n;
+	private void deleteOldCacheFiles(File dir, long maxAgeMs) {
+		File[] files = dir.listFiles();
+		if (files == null) return;
+		long cutoff = System.currentTimeMillis() - maxAgeMs;
+		for (File f : files) {
+			if (f.lastModified() < cutoff && !f.delete()) {
+				LOG.info("Could not delete stale open cache file");
+			}
+		}
 	}
 
 	private void onFileChosen(@Nullable Uri uri) {
@@ -919,6 +934,8 @@ public class ConversationActivity extends BriarActivity
 				runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
 			} catch (DbException | IOException e) {
 				logException(LOG, WARNING, e);
+				runOnUiThreadUnlessDestroyed(() -> Toast.makeText(this,
+						R.string.file_transfer_send_error, LENGTH_LONG).show());
 			} finally {
 				if (tempFile != null && !tempFile.delete()) {
 					LOG.info("Could not delete send temp file");
