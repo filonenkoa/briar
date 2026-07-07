@@ -306,6 +306,32 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testSendFileCleansUpChunksAfterFailure() throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		Message message = new Message(new MessageId(getRandomId()),
+				group.getId(), 1, new byte[] {1});
+		byte[] bytes = new byte[CHUNK_SIZE];
+
+		expectSendSetup(txn, contact, group);
+		expectAnyLocalMessages(txn, group, message);
+
+		try {
+			sendFile(txn, contact.getId(), "file.bin", "application/octet-stream",
+					CHUNK_SIZE + 1L, new ByteArrayInputStream(bytes));
+			fail();
+		} catch (IOException expected) {
+			assertTrue(expected.getMessage().contains(
+					"Expected " + (CHUNK_SIZE + 1L) + " bytes"));
+		}
+
+		File storageDir = new File(testDir, "filetransfer");
+		File[] files = storageDir.listFiles();
+		assertTrue(files == null || files.length == 0);
+	}
+
+	@Test
 	public void testSendFileDoesNotOverreadFinalChunk() throws Exception {
 		Transaction txn = new Transaction(null, false);
 		Contact contact = getContact();

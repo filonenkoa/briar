@@ -161,6 +161,7 @@ import static org.briarproject.briar.android.conversation.ImageActivity.NAME;
 import static org.briarproject.briar.android.util.UiUtils.launchActivityToOpenFile;
 import static org.briarproject.briar.android.util.UiUtils.observeOnce;
 import static org.briarproject.briar.android.view.AuthorView.setAvatar;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_ATTACHMENTS_PER_MESSAGE;
 import static org.briarproject.briar.api.messaging.MessagingConstants.MAX_PRIVATE_MESSAGE_TEXT_LENGTH;
 import static org.briarproject.briar.api.messaging.PrivateMessageFormat.TEXT_IMAGES_AUTO_DELETE;
@@ -879,15 +880,27 @@ public class ConversationActivity extends BriarActivity
 		ContentResolver cr = getContentResolver();
 		String name = "file";
 		String mime = cr.getType(uri);
+		long size = -1;
 		try (Cursor c = cr.query(uri,
-				new String[] {OpenableColumns.DISPLAY_NAME},
+				new String[] {OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE},
 				null, null, null)) {
 			if (c != null && c.moveToFirst()) {
-				String displayName = c.getString(0);
+				int nameIndex = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+				String displayName = nameIndex == -1 ? null :
+						c.getString(nameIndex);
 				if (!isNullOrEmpty(displayName)) name = displayName;
+				int sizeIndex = c.getColumnIndex(OpenableColumns.SIZE);
+				if (sizeIndex != -1 && !c.isNull(sizeIndex)) {
+					size = c.getLong(sizeIndex);
+				}
 			}
 		} catch (Exception e) {
 			logException(LOG, WARNING, e);
+		}
+		if (size > MAX_FILE_SIZE) {
+			logException(LOG, WARNING,
+					new IOException("File is larger than maximum size"));
+			return;
 		}
 		if (isNullOrEmpty(mime)) mime = "application/octet-stream";
 		final String fileName = name;
@@ -923,7 +936,14 @@ public class ConversationActivity extends BriarActivity
 			if (in == null) throw new IOException("Could not open stream");
 			byte[] buf = new byte[8192];
 			int n;
-			while ((n = in.read(buf)) != -1) os.write(buf, 0, n);
+			long total = 0;
+			while ((n = in.read(buf)) != -1) {
+				if (total + n > MAX_FILE_SIZE) {
+					throw new IOException("File is larger than maximum size");
+				}
+				os.write(buf, 0, n);
+				total += n;
+			}
 			success = true;
 			return out;
 		} finally {

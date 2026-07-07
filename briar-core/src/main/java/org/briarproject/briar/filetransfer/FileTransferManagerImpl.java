@@ -404,6 +404,24 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
 	}
 
+	private boolean deleteRecursively(File file) {
+		if (file.isDirectory()) {
+			File[] children = file.listFiles();
+			if (children != null) {
+				for (File child : children) {
+					if (!deleteRecursively(child)) return false;
+				}
+			}
+		}
+		return !file.exists() || file.delete();
+	}
+
+	private void deleteAfterFailedSend(File fileDir) {
+		if (!deleteRecursively(fileDir)) {
+			LOG.info("Could not delete failed file transfer");
+		}
+	}
+
 	private void writeBytes(File file, byte[] bytes) throws DbException {
 		File dir = file.getParentFile();
 		if (dir != null && !dir.exists() && !dir.mkdirs()) {
@@ -483,40 +501,45 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		clientHelper.addLocalMessage(txn, headerMessage, headerMeta, true,
 				false);
 		conversationManager.trackOutgoingMessage(txn, headerMessage);
-		byte[] buf = new byte[CHUNK_SIZE];
-		long totalRead = 0;
-		int chunkIndex = 0;
-		while (totalRead < fileSize) {
-			int max = (int) Math.min(CHUNK_SIZE, fileSize - totalRead);
-			int n = readFully(in, buf, max);
-			if (n < max) {
-				throw new IOException("Expected " + fileSize + " bytes but read " +
-						(totalRead + n));
+		try {
+			byte[] buf = new byte[CHUNK_SIZE];
+			long totalRead = 0;
+			int chunkIndex = 0;
+			while (totalRead < fileSize) {
+				int max = (int) Math.min(CHUNK_SIZE, fileSize - totalRead);
+				int n = readFully(in, buf, max);
+				if (n < max) {
+					throw new IOException("Expected " + fileSize +
+							" bytes but read " + (totalRead + n));
+				}
+				byte[] payload = new byte[n];
+				System.arraycopy(buf, 0, payload, 0, n);
+				long timestamp = base + chunkIndex + 1;
+				BdfList body = BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(),
+						chunkIndex, chunkTotal, payload);
+				Message m = clientHelper.createMessage(groupId, timestamp, body);
+				BdfDictionary meta = new BdfDictionary();
+				meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
+				meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
+				meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
+				meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
+				meta.put(MSG_KEY_LOCAL, true);
+				meta.put(MSG_KEY_TIMESTAMP, timestamp);
+				clientHelper.addLocalMessage(txn, m, meta, true, false);
+				writeChunk(fileDir, chunkIndex, chunkTotal, payload);
+				chunkIndex++;
+				totalRead += n;
 			}
-			byte[] payload = new byte[n];
-			System.arraycopy(buf, 0, payload, 0, n);
-			long timestamp = base + chunkIndex + 1;
-			BdfList body = BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(),
-					chunkIndex, chunkTotal, payload);
-			Message m = clientHelper.createMessage(groupId, timestamp, body);
-			BdfDictionary meta = new BdfDictionary();
-			meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
-			meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
-			meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
-			meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
-			meta.put(MSG_KEY_LOCAL, true);
-			meta.put(MSG_KEY_TIMESTAMP, timestamp);
-			clientHelper.addLocalMessage(txn, m, meta, true, false);
-			writeChunk(fileDir, chunkIndex, chunkTotal, payload);
-			chunkIndex++;
-			totalRead += n;
+			if (totalRead != fileSize) {
+				throw new IOException("Expected " + fileSize +
+						" bytes but read " + totalRead);
+			}
+			// Assemble the sender's own copy so getFile() works for the sender
+			assembleFile(fileDir, fileName, chunkTotal);
+		} catch (DbException | IOException e) {
+			deleteAfterFailedSend(fileDir);
+			throw e;
 		}
-		if (totalRead != fileSize) {
-			throw new IOException("Expected " + fileSize + " bytes but read " +
-					totalRead);
-		}
-		// Assemble the sender's own copy so getFile() works for the sender
-		assembleFile(fileDir, fileName, chunkTotal);
 		return new FileTransferHeader(headerMessage.getId(), groupId,
 				headerTimestamp, true, true, false, false, NO_AUTO_DELETE_TIMER,
 				fileId, fileName, contentType, fileSize, chunkTotal);
