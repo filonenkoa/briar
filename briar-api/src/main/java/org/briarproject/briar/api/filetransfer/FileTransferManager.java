@@ -41,6 +41,16 @@ public interface FileTransferManager extends ConversationClient,
 	FileTransferProgress getProgress(FileTransferHeader h) throws DbException;
 
 	/**
+	 * Cancels a sent file transfer and notifies the receiver.
+	 */
+	void cancelFileTransfer(FileTransferHeader h) throws DbException;
+
+	/**
+	 * Rejects a received file transfer and notifies the sender.
+	 */
+	void rejectFileTransfer(FileTransferHeader h) throws DbException;
+
+	/**
 	 * Returns the header for the given message id, or null if it is not a
 	 * file-transfer header.
 	 */

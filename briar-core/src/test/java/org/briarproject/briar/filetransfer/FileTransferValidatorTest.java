@@ -15,9 +15,18 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUN
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_ID;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_LOCAL;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TRANSFER_STATE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CONTROL;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_CANCELLED_BY_SENDER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_REJECTED_BY_RECEIVER;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
@@ -117,6 +126,38 @@ public class FileTransferValidatorTest extends ValidatorTestCase {
 		assertFalse(meta.containsKey(MSG_KEY_READ));
 	}
 
+	@Test
+	public void testAcceptsCancelControlMessage() throws Exception {
+		byte[] fileId = randomFileId();
+		BdfList body = BdfList.of(MSG_TYPE_CONTROL, fileId,
+				TRANSFER_STATE_CANCELLED_BY_SENDER);
+
+		BdfDictionary meta = assertValid(body);
+
+		assertControlMetadata(meta, fileId,
+				TRANSFER_STATE_CANCELLED_BY_SENDER);
+	}
+
+	@Test
+	public void testAcceptsRejectControlMessage() throws Exception {
+		byte[] fileId = randomFileId();
+		BdfList body = BdfList.of(MSG_TYPE_CONTROL, fileId,
+				TRANSFER_STATE_REJECTED_BY_RECEIVER);
+
+		BdfDictionary meta = assertValid(body);
+
+		assertControlMetadata(meta, fileId,
+				TRANSFER_STATE_REJECTED_BY_RECEIVER);
+	}
+
+	@Test
+	public void testRejectsControlMessageWithUnknownState() throws Exception {
+		BdfList body = BdfList.of(MSG_TYPE_CONTROL, randomFileId(),
+				"unknown");
+
+		assertInvalid(body);
+	}
+
 	private BdfDictionary assertValid(BdfList body) throws Exception {
 		BdfMessageContext context =
 				validator.validateMessage(message, group, body);
@@ -130,6 +171,15 @@ public class FileTransferValidatorTest extends ValidatorTestCase {
 		} catch (FormatException | InvalidMessageException expected) {
 			// Expected.
 		}
+	}
+
+	private void assertControlMetadata(BdfDictionary meta, byte[] fileId,
+			String transferState) throws FormatException {
+		assertEquals(MSG_TYPE_CONTROL, meta.getString(MSG_KEY_MSG_TYPE));
+		assertArrayEquals(fileId, meta.getRaw(MSG_KEY_FILE_ID));
+		assertEquals(transferState, meta.getString(MSG_KEY_TRANSFER_STATE));
+		assertFalse(meta.getBoolean(MSG_KEY_LOCAL));
+		assertEquals(timestamp, meta.getLong(MSG_KEY_TIMESTAMP).longValue());
 	}
 
 	private byte[] randomFileId() {

@@ -10,6 +10,10 @@ public class FileTransferProgress {
 		TRANSFERRING,
 		/** All chunks have been delivered/received. */
 		COMPLETE,
+		/** Transfer was cancelled by the sender. */
+		CANCELLED,
+		/** Transfer was rejected by the receiver. */
+		REJECTED,
 		/** An error occurred. */
 		ERROR
 	}

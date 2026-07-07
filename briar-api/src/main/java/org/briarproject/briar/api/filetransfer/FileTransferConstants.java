@@ -28,6 +28,7 @@ public interface FileTransferConstants {
 	String MSG_KEY_MSG_TYPE = "type";
 	String MSG_TYPE_HEADER = "header";
 	String MSG_TYPE_CHUNK = "chunk";
+	String MSG_TYPE_CONTROL = "control";
 
 	// Header message metadata
 	String MSG_KEY_FILE_ID = "fileId";
@@ -39,6 +40,11 @@ public interface FileTransferConstants {
 
 	// Chunk message metadata
 	String MSG_KEY_CHUNK_INDEX = "chunkIndex";
+
+	// Control message metadata
+	String MSG_KEY_TRANSFER_STATE = "transferState";
+	String TRANSFER_STATE_CANCELLED_BY_SENDER = "cancelled_by_sender";
+	String TRANSFER_STATE_REJECTED_BY_RECEIVER = "rejected_by_receiver";
 
 	// Shared metadata
 	String MSG_KEY_LOCAL = "local";

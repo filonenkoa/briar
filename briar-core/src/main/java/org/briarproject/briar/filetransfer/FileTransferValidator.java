@@ -36,8 +36,12 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_LOCAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TRANSFER_STATE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CONTROL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_CANCELLED_BY_SENDER;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.TRANSFER_STATE_REJECTED_BY_RECEIVER;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 
 @Immutable
@@ -61,6 +65,8 @@ class FileTransferValidator extends BdfMessageValidator {
 			meta = validateHeader(m, body);
 		} else if (MSG_TYPE_CHUNK.equals(messageType)) {
 			meta = validateChunk(m, body);
+		} else if (MSG_TYPE_CONTROL.equals(messageType)) {
+			meta = validateControl(m, body);
 		} else {
 			throw new InvalidMessageException("Unknown message type");
 		}
@@ -128,6 +134,25 @@ class FileTransferValidator extends BdfMessageValidator {
 		meta.put(MSG_KEY_FILE_ID, fileId);
 		meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
 		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
+		meta.put(MSG_KEY_LOCAL, false);
+		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
+		return meta;
+	}
+
+	private BdfDictionary validateControl(Message m, BdfList body)
+			throws FormatException {
+		// type(String), fileId(byte[]), transferState(String)
+		checkSize(body, 3);
+		byte[] fileId = body.getRaw(1);
+		checkLength(fileId, UniqueId.LENGTH);
+		String transferState = body.getString(2);
+		if (!TRANSFER_STATE_CANCELLED_BY_SENDER.equals(transferState) &&
+				!TRANSFER_STATE_REJECTED_BY_RECEIVER.equals(transferState))
+			throw new FormatException();
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CONTROL);
+		meta.put(MSG_KEY_FILE_ID, fileId);
+		meta.put(MSG_KEY_TRANSFER_STATE, transferState);
 		meta.put(MSG_KEY_LOCAL, false);
 		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
 		return meta;
