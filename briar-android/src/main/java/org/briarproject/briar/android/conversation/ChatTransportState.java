@@ -1,5 +1,8 @@
 package org.briarproject.briar.android.conversation;
 
+import org.briarproject.bramble.api.plugin.BluetoothConstants;
+import org.briarproject.bramble.api.plugin.LanTcpConstants;
+import org.briarproject.bramble.api.plugin.TorConstants;
 import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -17,15 +20,9 @@ class ChatTransportState {
 
 		@Nullable
 		static Transport fromId(TransportId id) {
-			if (org.briarproject.bramble.api.plugin.TorConstants.ID.equals(id)) {
-				return INTERNET;
-			}
-			if (org.briarproject.bramble.api.plugin.LanTcpConstants.ID.equals(id)) {
-				return WIFI;
-			}
-			if (org.briarproject.bramble.api.plugin.BluetoothConstants.ID.equals(id)) {
-				return BLUETOOTH;
-			}
+			if (TorConstants.ID.equals(id)) return INTERNET;
+			if (LanTcpConstants.ID.equals(id)) return WIFI;
+			if (BluetoothConstants.ID.equals(id)) return BLUETOOTH;
 			return null;
 		}
 	}
