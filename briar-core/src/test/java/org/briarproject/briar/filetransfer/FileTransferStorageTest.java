@@ -592,6 +592,52 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testGetFileTransferHeaderDefaultsLegacyReadMetadata()
+			throws Exception {
+		Transaction localTxn = new Transaction(null, true);
+		Transaction remoteTxn = new Transaction(null, true);
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		MessageId localMessageId = new MessageId(getRandomId());
+		MessageId remoteMessageId = new MessageId(getRandomId());
+		Message localMessage = new Message(localMessageId, group.getId(), 1,
+				new byte[] {1});
+		Message remoteMessage = new Message(remoteMessageId, group.getId(), 2,
+				new byte[] {2});
+		BdfDictionary localMeta = legacyHeaderMetadata(
+				new UniqueId(getRandomId()), true);
+		BdfDictionary remoteMeta = legacyHeaderMetadata(
+				new UniqueId(getRandomId()), false);
+
+		context.checking(new Expectations() {{
+			oneOf(db).transactionWithResult(with(true),
+					with(any(DbCallable.class)));
+			will(runTransaction(localTxn));
+			oneOf(clientHelper).getMessageMetadataAsDictionary(localTxn,
+					localMessageId);
+			will(returnValue(localMeta));
+			oneOf(clientHelper).getMessage(localTxn, localMessageId);
+			will(returnValue(localMessage));
+
+			oneOf(db).transactionWithResult(with(true),
+					with(any(DbCallable.class)));
+			will(runTransaction(remoteTxn));
+			oneOf(clientHelper).getMessageMetadataAsDictionary(remoteTxn,
+					remoteMessageId);
+			will(returnValue(remoteMeta));
+			oneOf(clientHelper).getMessage(remoteTxn, remoteMessageId);
+			will(returnValue(remoteMessage));
+		}});
+
+		FileTransferHeader localHeader =
+				manager.getFileTransferHeader(localMessageId);
+		FileTransferHeader remoteHeader =
+				manager.getFileTransferHeader(remoteMessageId);
+
+		assertTrue(localHeader.isRead());
+		assertFalse(remoteHeader.isRead());
+	}
+
+	@Test
 	public void testGetMessageHeadersDefaultsLegacyReadMetadata()
 			throws Exception {
 		Transaction txn = new Transaction(null, false);
@@ -817,6 +863,22 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		meta.put(MSG_KEY_LOCAL, local);
 		meta.put(MSG_KEY_TIMESTAMP, 1L);
 		return meta;
+	}
+
+	private Action runTransaction(Transaction txn) {
+		return new Action() {
+			@Override
+			public Object invoke(Invocation invocation) throws Throwable {
+				DbCallable<?, ?> callable =
+						(DbCallable<?, ?>) invocation.getParameter(1);
+				return callable.call(txn);
+			}
+
+			@Override
+			public void describeTo(Description description) {
+				description.appendText("runs transaction");
+			}
+		};
 	}
 
 	private void recalculateGroupCount(Transaction txn, GroupId groupId)
