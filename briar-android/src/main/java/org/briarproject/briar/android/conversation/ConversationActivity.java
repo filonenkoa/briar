@@ -831,8 +831,10 @@ public class ConversationActivity extends BriarActivity
 			ConnectionClosedEvent c = (ConnectionClosedEvent) e;
 			if (c.getContactId().equals(contactId)) {
 				runOnUiThreadUnlessDestroyed(() -> {
+					boolean stillConnected = connectionRegistry.isConnected(
+							contactId, c.getTransportId());
 					transportState = transportState.withTransport(
-							c.getTransportId(), false);
+							c.getTransportId(), stillConnected);
 					renderTransportStatus();
 				});
 			}
