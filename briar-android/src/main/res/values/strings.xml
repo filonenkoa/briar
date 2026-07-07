@@ -150,6 +150,13 @@
 	<string name="decline">Decline</string>
 	<string name="online">Online</string>
 	<string name="offline">Offline</string>
+	<string name="transport_status_internet_active">Internet active</string>
+	<string name="transport_status_internet_inactive">Internet inactive</string>
+	<string name="transport_status_wifi_active">WiFi active</string>
+	<string name="transport_status_wifi_inactive">WiFi inactive</string>
+	<string name="transport_status_bluetooth_active">Bluetooth active</string>
+	<string name="transport_status_bluetooth_inactive">Bluetooth inactive</string>
+	<string name="transport_status_summary">%1$s, %2$s, %3$s</string>
 	<string name="send">Send</string>
 	<string name="allow">Allow</string>
 	<string name="open">Open</string>
