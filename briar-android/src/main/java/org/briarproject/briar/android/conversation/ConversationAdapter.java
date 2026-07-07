@@ -20,6 +20,7 @@ import java.util.List;
 import androidx.annotation.LayoutRes;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
+import androidx.lifecycle.LifecycleOwner;
 import androidx.recyclerview.selection.SelectionTracker;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView.RecycledViewPool;
@@ -33,15 +34,17 @@ class ConversationAdapter
 		implements ItemReturningAdapter<ConversationItem> {
 
 	private final ConversationListener listener;
+	private final LifecycleOwner lifecycleOwner;
 	private final RecycledViewPool imageViewPool;
 	private final ImageItemDecoration imageItemDecoration;
 	@Nullable
 	private SelectionTracker<String> tracker = null;
 
-	ConversationAdapter(Context ctx,
-			ConversationListener conversationListener) {
+	ConversationAdapter(Context ctx, ConversationListener conversationListener,
+			LifecycleOwner lifecycleOwner) {
 		super(ctx, ConversationItem.class);
 		listener = conversationListener;
+		this.lifecycleOwner = lifecycleOwner;
 		// This shares the same pool for view recycling between all image lists
 		imageViewPool = new RecycledViewPool();
 		// Share the item decoration as well
@@ -84,9 +87,9 @@ class ConversationAdapter
 		} else if (type == R.layout.list_item_conversation_request) {
 			return new ConversationRequestViewHolder(v, listener, true);
 		} else if (type == R.layout.list_item_conversation_file_in) {
-			return new FileTransferViewHolder(v, listener, true);
+			return new FileTransferViewHolder(v, listener, lifecycleOwner, true);
 		} else if (type == R.layout.list_item_conversation_file_out) {
-			return new FileTransferViewHolder(v, listener, false);
+			return new FileTransferViewHolder(v, listener, lifecycleOwner, false);
 		}
 		throw new IllegalArgumentException("Unknown ConversationItem");
 	}

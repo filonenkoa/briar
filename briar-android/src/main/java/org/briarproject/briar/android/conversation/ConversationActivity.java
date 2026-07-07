@@ -295,7 +295,7 @@ public class ConversationActivity extends BriarActivity
 
 		visitor = new ConversationVisitor(this, this, this,
 				viewModel.getContactDisplayName());
-		adapter = new ConversationAdapter(this, this);
+		adapter = new ConversationAdapter(this, this, this);
 		list = findViewById(R.id.conversationView);
 		layoutManager = new LinearLayoutManager(this);
 		list.setLayoutManager(layoutManager);

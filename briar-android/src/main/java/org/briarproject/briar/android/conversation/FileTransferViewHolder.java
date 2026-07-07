@@ -12,6 +12,7 @@ import org.briarproject.nullsafety.NotNullByDefault;
 
 import androidx.annotation.Nullable;
 import androidx.lifecycle.LiveData;
+import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.Observer;
 import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
@@ -27,6 +28,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 	private final TextView fileSize;
 	private final ProgressBar progressBar;
 	private final TextView progressText;
+	private final LifecycleOwner lifecycleOwner;
 
 	@Nullable
 	private LiveData<FileTransferProgress> progressLiveData = null;
@@ -34,8 +36,10 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 	private Observer<FileTransferProgress> progressObserver = null;
 
 	FileTransferViewHolder(View v, ConversationListener listener,
+			LifecycleOwner lifecycleOwner,
 			boolean isIncoming) {
 		super(v, listener, isIncoming);
+		this.lifecycleOwner = lifecycleOwner;
 		fileIcon = v.findViewById(R.id.fileIcon);
 		fileName = v.findViewById(R.id.fileName);
 		fileSize = v.findViewById(R.id.fileSize);
@@ -59,7 +63,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		progressLiveData = liveData;
 		progressObserver = observer;
 		bindProgress(liveData.getValue());
-		liveData.observeForever(observer);
+		liveData.observe(lifecycleOwner, observer);
 	}
 
 	void unbind() {
