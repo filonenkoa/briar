@@ -17,6 +17,7 @@ import androidx.lifecycle.Observer;
 import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
 import static android.view.View.GONE;
+import static android.view.View.INVISIBLE;
 import static android.view.View.VISIBLE;
 import static org.briarproject.briar.android.util.UiUtils.formatFileSize;
 
@@ -25,6 +26,8 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 
 	private final ImageView fileIcon;
 	private final ImageView imagePreview;
+	@Nullable
+	private final ImageView status;
 	private final TextView fileName;
 	private final TextView fileSize;
 	private final ProgressBar progressBar;
@@ -43,6 +46,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		this.lifecycleOwner = lifecycleOwner;
 		fileIcon = v.findViewById(R.id.fileIcon);
 		imagePreview = v.findViewById(R.id.imagePreview);
+		status = v.findViewById(R.id.status);
 		fileName = v.findViewById(R.id.fileName);
 		fileSize = v.findViewById(R.id.fileSize);
 		progressBar = v.findViewById(R.id.progressBar);
@@ -83,6 +87,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		State state = p.getState();
 		if (state == State.COMPLETE) {
 			progressBar.setVisibility(GONE);
+			if (status != null) status.setVisibility(VISIBLE);
 			progressText.setText(R.string.file_transfer_tap_to_open);
 			if (isImage(item)) {
 				imagePreview.setVisibility(VISIBLE);
@@ -94,11 +99,13 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 			}
 		} else if (state == State.ERROR) {
 			progressBar.setVisibility(GONE);
+			if (status != null) status.setVisibility(INVISIBLE);
 			progressText.setText(R.string.file_transfer_error);
 			imagePreview.setVisibility(GONE);
 			imagePreview.setTag(null);
 		} else {
 			progressBar.setVisibility(VISIBLE);
+			if (status != null) status.setVisibility(INVISIBLE);
 			progressBar.setProgress(pct);
 			imagePreview.setVisibility(GONE);
 			imagePreview.setTag(null);
