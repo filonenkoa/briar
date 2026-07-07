@@ -43,6 +43,9 @@ class FileTransferValidator extends BdfMessageValidator {
 
 	private static final Logger LOG =
 			getLogger(FileTransferValidator.class.getName());
+	private static final long MAX_FILE_SIZE = 10L * 1024 * 1024 * 1024;
+	private static final int MAX_CHUNK_TOTAL =
+			(int) ((MAX_FILE_SIZE + CHUNK_SIZE - 1) / CHUNK_SIZE);
 
 	FileTransferValidator(ClientHelper clientHelper,
 			MetadataEncoder metadataEncoder, Clock clock) {
@@ -77,8 +80,12 @@ class FileTransferValidator extends BdfMessageValidator {
 		checkLength(contentType, 1, 1024);
 		long fileSize = body.getLong(4);
 		if (fileSize < 0) throw new FormatException();
+		if (fileSize > MAX_FILE_SIZE) throw new FormatException();
 		int chunkTotal = body.getInt(5);
-		if (chunkTotal <= 0) throw new FormatException();
+		if (chunkTotal < 0) throw new FormatException();
+		if (chunkTotal > MAX_CHUNK_TOTAL) throw new FormatException();
+		if (chunkTotal != expectedChunkTotal(fileSize))
+			throw new FormatException();
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER);
 		meta.put(MSG_KEY_FILE_ID, fileId);
@@ -94,20 +101,31 @@ class FileTransferValidator extends BdfMessageValidator {
 
 	private BdfDictionary validateChunk(Message m, BdfList body)
 			throws FormatException {
-		// type(String), fileId(byte[]), chunkIndex(Integer), payload(byte[])
-		checkSize(body, 4);
+		// type(String), fileId(byte[]), chunkIndex(Integer),
+		// chunkTotal(Integer), payload(byte[])
+		checkSize(body, 5);
 		byte[] fileId = body.getRaw(1);
 		checkLength(fileId, UniqueId.LENGTH);
 		int chunkIndex = body.getInt(2);
-		if (chunkIndex < 0) throw new FormatException();
-		byte[] payload = body.getRaw(3);
-		checkLength(payload, 1, CHUNK_SIZE);
+		int chunkTotal = body.getInt(3);
+		if (chunkTotal <= 0 || chunkTotal > MAX_CHUNK_TOTAL)
+			throw new FormatException();
+		if (chunkIndex < 0 || chunkIndex >= chunkTotal)
+			throw new FormatException();
+		byte[] payload = body.getRaw(4);
+		checkLength(payload, 0, CHUNK_SIZE);
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
 		meta.put(MSG_KEY_FILE_ID, fileId);
 		meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
+		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
 		meta.put(MSG_KEY_LOCAL, false);
 		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
 		return meta;
+	}
+
+	private int expectedChunkTotal(long fileSize) {
+		return fileSize == 0 ? 0 :
+				(int) ((fileSize + CHUNK_SIZE - 1) / CHUNK_SIZE);
 	}
 }

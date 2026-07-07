@@ -220,7 +220,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		int chunkIndex = metaDict.getInt(MSG_KEY_CHUNK_INDEX);
 		// Write the payload to disk
 		BdfList body = clientHelper.getMessageAsList(txn, m.getId());
-		byte[] payload = body.getRaw(3);
+		byte[] payload = body.getRaw(4);
 		File fileDir = getFileDir(fileId);
 		fileDir.mkdirs();
 		writeBytes(getChunkFile(fileDir, chunkIndex), payload);
@@ -321,7 +321,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			throws DbException, IOException {
 		GroupId groupId = getContactGroup(db.getContact(txn, c)).getId();
 		UniqueId fileId = generateFileId();
-		int chunkTotal = fileSize == 0 ? 1
+		int chunkTotal = fileSize == 0 ? 0
 				: (int) Math.ceil((double) fileSize / CHUNK_SIZE);
 		File fileDir = getFileDir(fileId);
 		fileDir.mkdirs();
@@ -336,12 +336,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			System.arraycopy(buf, 0, payload, 0, n);
 			long timestamp = base + chunkIndex;
 			BdfList body = BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(),
-					chunkIndex, payload);
+					chunkIndex, chunkTotal, payload);
 			Message m = clientHelper.createMessage(groupId, timestamp, body);
 			BdfDictionary meta = new BdfDictionary();
 			meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
 			meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
 			meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
+			meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
 			meta.put(MSG_KEY_LOCAL, true);
 			meta.put(MSG_KEY_TIMESTAMP, timestamp);
 			clientHelper.addLocalMessage(txn, m, meta, true, false);
