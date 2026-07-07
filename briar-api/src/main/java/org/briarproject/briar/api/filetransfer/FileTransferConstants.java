@@ -20,6 +20,9 @@ public interface FileTransferConstants {
 	 * descriptor.
 	 */
 	int CHUNK_SIZE = 16 * 1024;
+	long MAX_FILE_SIZE = 10L * 1024 * 1024 * 1024;
+	int MAX_CHUNK_TOTAL = (int) ((MAX_FILE_SIZE + CHUNK_SIZE - 1) /
+			CHUNK_SIZE);
 
 	// Message type stored in metadata
 	String MSG_KEY_MSG_TYPE = "type";

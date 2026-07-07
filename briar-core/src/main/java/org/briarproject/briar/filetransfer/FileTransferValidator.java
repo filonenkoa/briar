@@ -24,6 +24,8 @@ import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.util.ValidationUtils.checkLength;
 import static org.briarproject.bramble.util.ValidationUtils.checkSize;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUNK_SIZE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_CHUNK_TOTAL;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_INDEX;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNKS_RECEIVED;
@@ -43,9 +45,6 @@ class FileTransferValidator extends BdfMessageValidator {
 
 	private static final Logger LOG =
 			getLogger(FileTransferValidator.class.getName());
-	private static final long MAX_FILE_SIZE = 10L * 1024 * 1024 * 1024;
-	private static final int MAX_CHUNK_TOTAL =
-			(int) ((MAX_FILE_SIZE + CHUNK_SIZE - 1) / CHUNK_SIZE);
 
 	FileTransferValidator(ClientHelper clientHelper,
 			MetadataEncoder metadataEncoder, Clock clock) {
@@ -113,7 +112,7 @@ class FileTransferValidator extends BdfMessageValidator {
 		if (chunkIndex < 0 || chunkIndex >= chunkTotal)
 			throw new FormatException();
 		byte[] payload = body.getRaw(4);
-		checkLength(payload, 0, CHUNK_SIZE);
+		checkLength(payload, 1, CHUNK_SIZE);
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
 		meta.put(MSG_KEY_FILE_ID, fileId);

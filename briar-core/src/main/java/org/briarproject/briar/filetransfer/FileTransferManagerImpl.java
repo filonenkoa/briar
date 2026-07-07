@@ -70,6 +70,7 @@ import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.client.ContactGroupConstants.GROUP_KEY_CONTACT_ID;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUNK_SIZE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_INDEX;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNKS_RECEIVED;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CONTENT_TYPE;
@@ -218,22 +219,30 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		GroupId groupId = m.getGroupId();
 		UniqueId fileId = new UniqueId(metaDict.getRaw(MSG_KEY_FILE_ID));
 		int chunkIndex = metaDict.getInt(MSG_KEY_CHUNK_INDEX);
-		// Write the payload to disk
-		BdfList body = clientHelper.getMessageAsList(txn, m.getId());
-		byte[] payload = body.getRaw(4);
-		File fileDir = getFileDir(fileId);
-		fileDir.mkdirs();
-		writeBytes(getChunkFile(fileDir, chunkIndex), payload);
+		int chunkTotal = metaDict.getInt(MSG_KEY_CHUNK_TOTAL);
 		// Find the header message for this file and increment its received count
 		BdfDictionary query = BdfDictionary.of(
 				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
 				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER));
 		Map<MessageId, BdfDictionary> headers =
 				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
+		boolean matchingHeader = false;
+		for (BdfDictionary h : headers.values()) {
+			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
+			if (chunkTotal == total && chunkIndex < total) matchingHeader = true;
+		}
+		if (!matchingHeader) return;
+		// Write the payload to disk
+		BdfList body = clientHelper.getMessageAsList(txn, m.getId());
+		byte[] payload = body.getRaw(4);
+		File fileDir = getFileDir(fileId);
+		fileDir.mkdirs();
+		writeBytes(getChunkFile(fileDir, chunkIndex), payload);
 		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
 			BdfDictionary h = e.getValue();
 			int received = h.getInt(MSG_KEY_CHUNKS_RECEIVED);
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
+			if (chunkTotal != total || chunkIndex >= total) continue;
 			BdfDictionary merge = new BdfDictionary();
 			merge.put(MSG_KEY_CHUNKS_RECEIVED, received + 1);
 			clientHelper.mergeMessageMetadata(txn, e.getKey(), merge);
@@ -319,6 +328,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	private FileTransferHeader sendFile(Transaction txn, ContactId c,
 			String fileName, String contentType, long fileSize, InputStream in)
 			throws DbException, IOException {
+		if (fileSize > MAX_FILE_SIZE) throw new IOException();
 		GroupId groupId = getContactGroup(db.getContact(txn, c)).getId();
 		UniqueId fileId = generateFileId();
 		int chunkTotal = fileSize == 0 ? 0

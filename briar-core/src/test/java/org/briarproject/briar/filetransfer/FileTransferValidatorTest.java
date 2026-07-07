@@ -12,6 +12,8 @@ import org.junit.Test;
 import java.security.SecureRandom;
 
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUNK_SIZE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_CHUNK_TOTAL;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
@@ -19,8 +21,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
 public class FileTransferValidatorTest extends ValidatorTestCase {
-
-	private static final long MAX_FILE_SIZE = 10L * 1024 * 1024 * 1024;
 
 	private final FileTransferValidator validator =
 			new FileTransferValidator(clientHelper, metadataEncoder, clock);
@@ -55,6 +55,30 @@ public class FileTransferValidatorTest extends ValidatorTestCase {
 	public void testRejectsChunkWithIndexOutsideTotal() throws Exception {
 		BdfList body = BdfList.of(MSG_TYPE_CHUNK, randomFileId(), 3, 3,
 				new byte[] {1, 2, 3});
+
+		assertInvalid(body);
+	}
+
+	@Test
+	public void testRejectsChunkWithZeroLengthPayload() throws Exception {
+		BdfList body = BdfList.of(MSG_TYPE_CHUNK, randomFileId(), 0, 1,
+				new byte[0]);
+
+		assertInvalid(body);
+	}
+
+	@Test
+	public void testRejectsChunkWithZeroTotal() throws Exception {
+		BdfList body = BdfList.of(MSG_TYPE_CHUNK, randomFileId(), 0, 0,
+				new byte[] {1, 2, 3});
+
+		assertInvalid(body);
+	}
+
+	@Test
+	public void testRejectsChunkWithTotalAboveMaximum() throws Exception {
+		BdfList body = BdfList.of(MSG_TYPE_CHUNK, randomFileId(), 0,
+				MAX_CHUNK_TOTAL + 1, new byte[] {1, 2, 3});
 
 		assertInvalid(body);
 	}
