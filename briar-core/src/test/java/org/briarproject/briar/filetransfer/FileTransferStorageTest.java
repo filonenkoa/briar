@@ -19,10 +19,12 @@ import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.bramble.api.sync.MessageStatus;
 import org.briarproject.bramble.api.versioning.ClientVersioningManager;
 import org.briarproject.bramble.test.BrambleMockTestCase;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
+import org.briarproject.briar.api.conversation.ConversationMessageHeader;
 import org.briarproject.briar.api.filetransfer.FileTransferHeader;
 import org.hamcrest.Description;
 import org.jmock.Expectations;
@@ -39,6 +41,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -56,9 +60,13 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAJO
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_INDEX;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNKS_RECEIVED;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CONTENT_TYPE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_ID;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_NAME;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_SIZE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_LOCAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
 import static org.junit.Assert.assertArrayEquals;
@@ -583,6 +591,71 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		manager.setReadFlag(txn, groupId, messageId, true);
 	}
 
+	@Test
+	public void testGetMessageHeadersDefaultsLegacyReadMetadata()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		MessageId localMessageId = new MessageId(getRandomId());
+		MessageId remoteMessageId = new MessageId(getRandomId());
+		Message localMessage = new Message(localMessageId, group.getId(), 1,
+				new byte[] {1});
+		Message remoteMessage = new Message(remoteMessageId, group.getId(), 2,
+				new byte[] {2});
+		Map<MessageId, BdfDictionary> metadata = new HashMap<>();
+		metadata.put(localMessageId, legacyHeaderMetadata(
+				new UniqueId(getRandomId()), true));
+		metadata.put(remoteMessageId, legacyHeaderMetadata(
+				new UniqueId(getRandomId()), false));
+		Collection<MessageStatus> statuses = Arrays.asList(
+				new MessageStatus(localMessageId, contact.getId(), true, true),
+				new MessageStatus(remoteMessageId, contact.getId(), false, false));
+
+		expectSendSetup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, group.getId());
+			will(returnValue(metadata));
+			oneOf(db).getMessageStatus(txn, contact.getId(), group.getId());
+			will(returnValue(statuses));
+			oneOf(clientHelper).getMessage(txn, localMessageId);
+			will(returnValue(localMessage));
+			oneOf(clientHelper).getMessage(txn, remoteMessageId);
+			will(returnValue(remoteMessage));
+		}});
+
+		Collection<ConversationMessageHeader> headers =
+				manager.getMessageHeaders(txn, contact.getId());
+
+		for (ConversationMessageHeader header : headers) {
+			if (header.getId().equals(localMessageId)) assertTrue(header.isRead());
+			else if (header.getId().equals(remoteMessageId)) {
+				assertFalse(header.isRead());
+			} else fail();
+		}
+		assertEquals(2, headers.size());
+	}
+
+	@Test
+	public void testRecalculateGroupCountDefaultsLegacyReadMetadata()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		Map<MessageId, BdfDictionary> metadata = new HashMap<>();
+		metadata.put(new MessageId(getRandomId()), legacyHeaderMetadata(
+				new UniqueId(getRandomId()), true));
+		metadata.put(new MessageId(getRandomId()), legacyHeaderMetadata(
+				new UniqueId(getRandomId()), false));
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, groupId);
+			will(returnValue(metadata));
+			oneOf(messageTracker).resetGroupCount(txn, groupId, 2, 1);
+		}});
+
+		recalculateGroupCount(txn, groupId);
+	}
+
 	private void expectSendSetup(Transaction txn, Contact contact, Group group)
 			throws Exception {
 		ContactId contactId = contact.getId();
@@ -730,5 +803,27 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
 		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
 		return meta;
+	}
+
+	private BdfDictionary legacyHeaderMetadata(UniqueId fileId, boolean local) {
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER);
+		meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
+		meta.put(MSG_KEY_FILE_NAME, "file.bin");
+		meta.put(MSG_KEY_CONTENT_TYPE, "application/octet-stream");
+		meta.put(MSG_KEY_FILE_SIZE, 0L);
+		meta.put(MSG_KEY_CHUNK_TOTAL, 0);
+		meta.put(MSG_KEY_CHUNKS_RECEIVED, 0);
+		meta.put(MSG_KEY_LOCAL, local);
+		meta.put(MSG_KEY_TIMESTAMP, 1L);
+		return meta;
+	}
+
+	private void recalculateGroupCount(Transaction txn, GroupId groupId)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"recalculateGroupCount", Transaction.class, GroupId.class);
+		method.setAccessible(true);
+		method.invoke(manager, txn, groupId);
 	}
 }

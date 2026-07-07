@@ -701,7 +701,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			if (!MSG_TYPE_HEADER.equals(meta.getString(MSG_KEY_MSG_TYPE)))
 				return null;
 			boolean local = meta.getBoolean(MSG_KEY_LOCAL);
-			boolean read = meta.getBoolean(MSG_KEY_READ);
+			boolean read = getReadFlag(meta);
 			return buildHeader(txn, m, meta, local, read, false, false);
 		} catch (FormatException e) {
 			throw new DbException(e);
@@ -721,6 +721,11 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		return new FileTransferHeader(id, groupId, timestamp, local, read, sent,
 				seen, NO_AUTO_DELETE_TIMER, fileId, fileName, contentType,
 				fileSize, chunkTotal);
+	}
+
+	private boolean getReadFlag(BdfDictionary meta) throws FormatException {
+		Boolean read = meta.getOptionalBoolean(MSG_KEY_READ);
+		return read == null ? meta.getBoolean(MSG_KEY_LOCAL) : read;
 	}
 
 	@Override
@@ -745,7 +750,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 				if (!MSG_TYPE_HEADER.equals(meta.getString(MSG_KEY_MSG_TYPE)))
 					continue;
 				boolean local = meta.getBoolean(MSG_KEY_LOCAL);
-				boolean read = meta.getBoolean(MSG_KEY_READ);
+				boolean read = getReadFlag(meta);
 				headers.add(buildHeader(txn, id, meta, local, read,
 						s.isSent(), s.isSeen()));
 			} catch (FormatException e) {
@@ -883,7 +888,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		for (BdfDictionary meta : metadata.values()) {
 			if (MSG_TYPE_HEADER.equals(meta.getOptionalString(MSG_KEY_MSG_TYPE))) {
 				msgCount++;
-				if (!meta.getBoolean(MSG_KEY_READ)) unreadCount++;
+				if (!getReadFlag(meta)) unreadCount++;
 			}
 		}
 		messageTracker.resetGroupCount(txn, g, msgCount, unreadCount);
