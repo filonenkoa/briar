@@ -75,6 +75,9 @@ class FileTransferValidator extends BdfMessageValidator {
 		checkLength(fileId, UniqueId.LENGTH);
 		String fileName = body.getString(2);
 		checkLength(fileName, 1, 1024);
+		if (fileName.equals(".") || fileName.equals("..") ||
+				fileName.indexOf('/') != -1 || fileName.indexOf('\\') != -1)
+			throw new FormatException();
 		String contentType = body.getString(3);
 		checkLength(contentType, 1, 1024);
 		long fileSize = body.getLong(4);

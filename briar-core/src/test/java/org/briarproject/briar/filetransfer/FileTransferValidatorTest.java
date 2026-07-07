@@ -52,6 +52,18 @@ public class FileTransferValidatorTest extends ValidatorTestCase {
 	}
 
 	@Test
+	public void testRejectsHeaderWithUnsafeFileName() throws Exception {
+		String[] unsafeNames = {"../evil.txt", "/tmp/evil.txt",
+				"dir\\evil.txt", "", ".", ".."};
+		for (String fileName : unsafeNames) {
+			BdfList body = BdfList.of(MSG_TYPE_HEADER, randomFileId(), fileName,
+					"application/octet-stream", 0L, 0);
+
+			assertInvalid(body);
+		}
+	}
+
+	@Test
 	public void testRejectsChunkWithIndexOutsideTotal() throws Exception {
 		BdfList body = BdfList.of(MSG_TYPE_CHUNK, randomFileId(), 3, 3,
 				new byte[] {1, 2, 3});

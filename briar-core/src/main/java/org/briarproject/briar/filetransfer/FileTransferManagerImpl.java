@@ -328,7 +328,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	private FileTransferHeader sendFile(Transaction txn, ContactId c,
 			String fileName, String contentType, long fileSize, InputStream in)
 			throws DbException, IOException {
-		if (fileSize > MAX_FILE_SIZE) throw new IOException();
+		if (fileSize < 0 || fileSize > MAX_FILE_SIZE) throw new IOException();
 		GroupId groupId = getContactGroup(db.getContact(txn, c)).getId();
 		UniqueId fileId = generateFileId();
 		int chunkTotal = fileSize == 0 ? 0
