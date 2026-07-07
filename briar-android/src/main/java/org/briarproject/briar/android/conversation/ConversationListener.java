@@ -21,6 +21,8 @@ interface ConversationListener {
 
 	void onFileClicked(ConversationFileItem item);
 
+	void onFileStopClicked(ConversationFileItem item);
+
 	void onFilePreviewRequested(ConversationFileItem item, ImageView imageView);
 
 	void onAutoDeleteTimerNoticeClicked();

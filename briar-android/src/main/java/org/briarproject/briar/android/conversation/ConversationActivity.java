@@ -842,9 +842,21 @@ public class ConversationActivity extends BriarActivity
 	@Override
 	public void onFileClicked(ConversationFileItem item) {
 		FileTransferProgress p = item.getProgress().getValue();
-		if (p == null || p.getState() != FileTransferProgress.State.COMPLETE)
+		if (p == null) return;
+		FileTransferProgress.State state = p.getState();
+		if (state == FileTransferProgress.State.CANCELLED ||
+				state == FileTransferProgress.State.REJECTED) {
+			Toast.makeText(this, R.string.file_transfer_stopped, LENGTH_SHORT)
+					.show();
 			return;
+		}
+		if (state != FileTransferProgress.State.COMPLETE) return;
 		openFile(item.getHeader());
+	}
+
+	@Override
+	public void onFileStopClicked(ConversationFileItem item) {
+		viewModel.stopFileTransfer(item.getHeader());
 	}
 
 	@Override

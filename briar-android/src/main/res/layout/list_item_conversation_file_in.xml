@@ -100,13 +100,25 @@
 			app:layout_constraintEnd_toEndOf="parent"
 			tools:text="42%  1.3 / 3.1 MB" />
 
+		<TextView
+			android:id="@+id/stopTransfer"
+			style="@style/TextMessage.Timestamp"
+			android:layout_width="0dp"
+			android:layout_height="wrap_content"
+			android:layout_marginTop="2dp"
+			android:text="@string/file_transfer_stop"
+			android:textStyle="bold"
+			app:layout_constraintTop_toBottomOf="@+id/progressText"
+			app:layout_constraintStart_toStartOf="parent"
+			app:layout_constraintEnd_toEndOf="parent" />
+
 		<LinearLayout
 			android:id="@+id/statusLayout"
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"
 			android:layout_marginTop="4dp"
 			android:orientation="horizontal"
-			app:layout_constraintTop_toBottomOf="@+id/progressText"
+			app:layout_constraintTop_toBottomOf="@+id/stopTransfer"
 			app:layout_constraintStart_toStartOf="parent"
 			app:layout_constraintEnd_toEndOf="parent"
 			app:layout_constraintBottom_toBottomOf="parent">

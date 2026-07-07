@@ -451,6 +451,20 @@ public class ConversationViewModel extends DbViewModel
 		return attachmentRetriever;
 	}
 
+	void stopFileTransfer(FileTransferHeader h) {
+		runOnDbThread(() -> {
+			try {
+				if (h.isLocal()) {
+					fileTransferManager.cancelFileTransfer(h);
+				} else {
+					fileTransferManager.rejectFileTransfer(h);
+				}
+			} catch (DbException e) {
+				handleException(e);
+			}
+		});
+	}
+
 	/**
 	 * Returns a {@link LiveData} with the progress of the given file transfer.
 	 * If this is the first time the transfer is observed, a periodic poll of
@@ -496,8 +510,8 @@ public class ConversationViewModel extends DbViewModel
 					fileHandler.post(() -> {
 						if (cleared || fileProgressPollers.get(id) != this) return;
 						live.setValue(progress);
-						if (progress.getState() == FileTransferProgress.State.COMPLETE
-								|| progress.getState() == FileTransferProgress.State.ERROR) {
+						if (progress.getState() !=
+								FileTransferProgress.State.TRANSFERRING) {
 							fileProgress.remove(id);
 							fileProgressPollers.remove(id);
 						} else {

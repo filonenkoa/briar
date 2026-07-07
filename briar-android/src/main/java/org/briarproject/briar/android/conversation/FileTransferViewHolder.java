@@ -32,6 +32,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 	private final TextView fileSize;
 	private final ProgressBar progressBar;
 	private final TextView progressText;
+	private final TextView stopTransfer;
 	private final LifecycleOwner lifecycleOwner;
 
 	@Nullable
@@ -51,6 +52,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		fileSize = v.findViewById(R.id.fileSize);
 		progressBar = v.findViewById(R.id.progressBar);
 		progressText = v.findViewById(R.id.progressText);
+		stopTransfer = v.findViewById(R.id.stopTransfer);
 	}
 
 	@Override
@@ -63,6 +65,8 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		fileSize.setText(formatFileSize(itemView.getContext(),
 				item.getHeader().getFileSize()));
 		itemView.setOnClickListener(view -> listener.onFileClicked(item));
+		stopTransfer.setOnClickListener(view ->
+				listener.onFileStopClicked(item));
 
 		LiveData<FileTransferProgress> liveData = item.getProgress();
 		Observer<FileTransferProgress> observer = p -> bindProgress(item, p);
@@ -87,6 +91,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		State state = p.getState();
 		if (state == State.COMPLETE) {
 			progressBar.setVisibility(GONE);
+			stopTransfer.setVisibility(GONE);
 			if (status != null) status.setVisibility(VISIBLE);
 			progressText.setText(R.string.file_transfer_tap_to_open);
 			if (isImage(item)) {
@@ -99,12 +104,32 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 			}
 		} else if (state == State.ERROR) {
 			progressBar.setVisibility(GONE);
+			stopTransfer.setVisibility(GONE);
 			if (status != null) status.setVisibility(INVISIBLE);
 			progressText.setText(R.string.file_transfer_error);
 			imagePreview.setVisibility(GONE);
 			imagePreview.setTag(null);
+		} else if (state == State.CANCELLED) {
+			progressBar.setVisibility(GONE);
+			stopTransfer.setVisibility(GONE);
+			if (status != null) status.setVisibility(INVISIBLE);
+			progressText.setText(item.getHeader().isLocal() ?
+					R.string.file_transfer_cancelled :
+					R.string.file_transfer_cancelled_by_sender);
+			imagePreview.setVisibility(GONE);
+			imagePreview.setTag(null);
+		} else if (state == State.REJECTED) {
+			progressBar.setVisibility(GONE);
+			stopTransfer.setVisibility(GONE);
+			if (status != null) status.setVisibility(INVISIBLE);
+			progressText.setText(item.getHeader().isLocal() ?
+					R.string.file_transfer_rejected_by_receiver :
+					R.string.file_transfer_rejected);
+			imagePreview.setVisibility(GONE);
+			imagePreview.setTag(null);
 		} else {
 			progressBar.setVisibility(VISIBLE);
+			stopTransfer.setVisibility(VISIBLE);
 			if (status != null) status.setVisibility(INVISIBLE);
 			progressBar.setProgress(pct);
 			imagePreview.setVisibility(GONE);
