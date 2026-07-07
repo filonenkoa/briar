@@ -1,6 +1,7 @@
 package org.briarproject.briar.android.conversation;
 
 import android.view.View;
+import android.widget.ImageView;
 
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.nullsafety.NotNullByDefault;
@@ -19,6 +20,8 @@ interface ConversationListener {
 			AttachmentItem attachmentItem);
 
 	void onFileClicked(ConversationFileItem item);
+
+	void onFilePreviewRequested(ConversationFileItem item, ImageView imageView);
 
 	void onAutoDeleteTimerNoticeClicked();
 

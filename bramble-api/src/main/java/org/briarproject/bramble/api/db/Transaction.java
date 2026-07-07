@@ -67,6 +67,16 @@ public class Transaction {
 	}
 
 	/**
+	 * Attaches a task to be executed synchronously when the transaction has been
+	 * committed, before any later {@link #attach(Runnable) tasks} are submitted
+	 * to the {@link EventExecutor}.
+	 */
+	public void attachSync(Runnable r) {
+		if (actions == null) actions = new ArrayList<>();
+		actions.add(new SyncAction(r));
+	}
+
+	/**
 	 * Returns any actions attached to the transaction.
 	 */
 	public List<CommitAction> getActions() {

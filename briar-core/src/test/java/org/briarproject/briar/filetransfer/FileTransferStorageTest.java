@@ -190,6 +190,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		GroupId groupId = new GroupId(getRandomId());
 		UniqueId fileId = new UniqueId(getRandomId());
 		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId existingChunkMessageId = new MessageId(getRandomId());
 		MessageId headerMessageId = new MessageId(getRandomId());
 		Message chunkMessage = new Message(chunkMessageId, groupId, 1,
 				new byte[] {1});
@@ -208,6 +209,9 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 					with(same(txn)), with(equal(groupId)),
 					with(any(BdfDictionary.class)));
 			will(returnValue(headers));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(groupId)), with(any(BdfDictionary.class)));
+			will(returnValue(Arrays.asList(existingChunkMessageId)));
 			allowing(clientHelper).getMessageAsList(txn, chunkMessageId);
 			will(returnValue(BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(), 0, 2,
 					new byte[] {9})));
@@ -318,6 +322,8 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		BdfDictionary header = headerMetadata(fileId, "file.bin", 5L, 2, 1);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
 		headers.put(headerMessageId, header);
+		BdfDictionary repaired = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 0));
 		BdfDictionary meta = chunkMetadata(fileId, 1, 2);
 
 		context.checking(new Expectations() {{
@@ -331,8 +337,8 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
 					headerMessageId);
 			will(returnValue(header));
-			never(clientHelper).mergeMessageMetadata(with(same(txn)),
-					with(equal(headerMessageId)), with(any(BdfDictionary.class)));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerMessageId,
+					repaired);
 		}});
 
 		incomingChunk(txn, chunkMessage, meta);
@@ -340,8 +346,50 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		File assembled = getAssembledFile(fileDir, "file.bin");
 		assertFalse(assembled.exists());
 		assertFalse(new File(assembled.getParentFile(), "file.bin.tmp").exists());
-		assertTrue(getChunkFile(fileDir, 0).exists());
-		assertTrue(getChunkFile(fileDir, 1).exists());
+		assertFalse(getChunkFile(fileDir, 0).exists());
+		assertFalse(getChunkTotalFile(fileDir, 0).exists());
+		assertFalse(getChunkFile(fileDir, 1).exists());
+		assertFalse(getChunkTotalFile(fileDir, 1).exists());
+	}
+
+	@Test
+	public void testCorrectChunksRecoverAfterFailedAssembly()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 2,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 2, new byte[] {1, 2});
+		writeChunk(fileDir, 1, 2, new byte[] {3, 4});
+		assembleFile(fileDir, "file.bin", 2, 5);
+
+		BdfDictionary header = headerMetadata(fileId, "file.bin", 5L, 2, 0);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary received = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+		BdfDictionary meta = chunkMetadata(fileId, 0, 2);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			oneOf(clientHelper).getMessageAsList(txn, chunkMessageId);
+			will(returnValue(BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(), 0, 2,
+					new byte[] {1, 2, 3})));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerMessageId,
+					received);
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		assertArrayEquals(new byte[] {1, 2, 3}, readBytes(getChunkFile(fileDir, 0)));
+		assertEquals(1, countExistingChunks(fileDir, 2));
 	}
 
 	@Test
@@ -937,9 +985,11 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 			long expectedSize)
 			throws Exception {
 		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
-				"assembleFile", File.class, String.class, int.class, long.class);
+				"assembleFile", UniqueId.class, File.class, String.class,
+				int.class, long.class);
 		method.setAccessible(true);
-		method.invoke(manager, fileDir, fileName, chunkTotal, expectedSize);
+		method.invoke(manager, new UniqueId(getRandomId()), fileDir, fileName,
+				chunkTotal, expectedSize);
 	}
 
 	private void writeChunk(File fileDir, int chunkIndex, int chunkTotal,

@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.client.ContactGroupFactory;
 import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.MetadataParser;
 import org.briarproject.bramble.api.db.CommitAction;
 import org.briarproject.bramble.api.db.DatabaseComponent;
@@ -55,6 +56,7 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
 import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -240,9 +242,9 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 			will(returnValue(chunkMetadata(fileId)));
 			oneOf(db).deleteMessage(txn, chunkId);
 			oneOf(db).deleteMessageMetadata(txn, chunkId);
-			oneOf(clientHelper).getMessageIds(with(same(txn)),
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
 					with(equal(group.getId())), with(any(BdfDictionary.class)));
-			will(returnValue(Collections.emptyList()));
+			will(returnValue(remaining));
 			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
 					group.getId());
 			will(returnValue(remaining));
@@ -256,6 +258,184 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 		runCommitTasks(txn);
 
 		assertFalse(fileDir.exists());
+	}
+
+	@Test
+	public void testDeletingChunkWithHeaderDeletesChunkFilesAndRepairsCount()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		writeChunkFiles(fileDir, 0, 2);
+		writeChunkFiles(fileDir, 1, 2);
+		Map<MessageId, BdfDictionary> remaining = new HashMap<>();
+		remaining.put(headerId, headerMetadata(fileId, true, 2, 2));
+		BdfDictionary received = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+
+		expectContactGroup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, chunkId);
+			will(returnValue(chunkMetadata(fileId, 0, 2)));
+			oneOf(db).deleteMessage(txn, chunkId);
+			oneOf(db).deleteMessageMetadata(txn, chunkId);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(remaining));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Collections.emptyList()));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, received);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(remaining));
+			oneOf(messageTracker).resetGroupCount(txn, group.getId(), 1, 0);
+		}});
+
+		manager.deleteMessages(txn, contact.getId(),
+				Collections.singleton(chunkId));
+
+		assertTrue(getChunkFile(fileDir, 0).exists());
+		assertTrue(getChunkFile(fileDir, 1).exists());
+		assertEquals(2, countExistingChunks(fileId, fileDir, 2));
+		runCommitTasks(txn);
+
+		assertFalse(getChunkFile(fileDir, 0).exists());
+		assertFalse(getChunkTotalFile(fileDir, 0).exists());
+		assertTrue(getChunkFile(fileDir, 1).exists());
+		assertTrue(fileDir.exists());
+	}
+
+	@Test
+	public void testDeletingChunkWithAssembledFileKeepsCompleteCount()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		File assembled = getAssembledFile(fileDir, "file.bin");
+		assertTrue(assembled.getParentFile().mkdirs());
+		writeBytes(assembled, new byte[] {1, 2});
+		Map<MessageId, BdfDictionary> remaining = new HashMap<>();
+		remaining.put(headerId, headerMetadata(fileId, true, 2, 2));
+		BdfDictionary complete = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 2));
+
+		expectContactGroup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, chunkId);
+			will(returnValue(chunkMetadata(fileId, 0, 2)));
+			oneOf(db).deleteMessage(txn, chunkId);
+			oneOf(db).deleteMessageMetadata(txn, chunkId);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(remaining));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Collections.emptyList()));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, complete);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(remaining));
+			oneOf(messageTracker).resetGroupCount(txn, group.getId(), 1, 0);
+		}});
+
+		manager.deleteMessages(txn, contact.getId(),
+				Collections.singleton(chunkId));
+	}
+
+	@Test
+	public void testDeletingWrongTotalChunkDoesNotDeleteReplacementChunk()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		writeChunkFiles(fileDir, 0, 2);
+		Map<MessageId, BdfDictionary> remaining = new HashMap<>();
+		remaining.put(headerId, headerMetadata(fileId, true, 2, 1));
+		BdfDictionary received = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+
+		expectContactGroup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, chunkId);
+			will(returnValue(chunkMetadata(fileId, 0, 3)));
+			oneOf(db).deleteMessage(txn, chunkId);
+			oneOf(db).deleteMessageMetadata(txn, chunkId);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(remaining));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Collections.emptyList()));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, received);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(remaining));
+			oneOf(messageTracker).resetGroupCount(txn, group.getId(), 1, 0);
+		}});
+
+		manager.deleteMessages(txn, contact.getId(),
+				Collections.singleton(chunkId));
+		runCommitTasks(txn);
+
+		assertTrue(getChunkFile(fileDir, 0).exists());
+		assertTrue(getChunkTotalFile(fileDir, 0).exists());
+	}
+
+	@Test
+	public void testDeletingDuplicateChunkMetadataKeepsChunkFile()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		MessageId remainingChunkId = new MessageId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		writeChunkFiles(fileDir, 0, 2);
+		Map<MessageId, BdfDictionary> remaining = new HashMap<>();
+		remaining.put(headerId, headerMetadata(fileId, true, 2, 1));
+		BdfDictionary received = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+
+		expectContactGroup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, chunkId);
+			will(returnValue(chunkMetadata(fileId, 0, 2)));
+			oneOf(db).deleteMessage(txn, chunkId);
+			oneOf(db).deleteMessageMetadata(txn, chunkId);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(remaining));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Collections.singletonList(remainingChunkId)));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, received);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(remaining));
+			oneOf(messageTracker).resetGroupCount(txn, group.getId(), 1, 0);
+		}});
+
+		manager.deleteMessages(txn, contact.getId(),
+				Collections.singleton(chunkId));
+		runCommitTasks(txn);
+
+		assertTrue(getChunkFile(fileDir, 0).exists());
+		assertTrue(getChunkTotalFile(fileDir, 0).exists());
 	}
 
 	@Test
@@ -309,14 +489,19 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 	}
 
 	private BdfDictionary headerMetadata(UniqueId fileId, boolean read) {
+		return headerMetadata(fileId, read, 1, 1);
+	}
+
+	private BdfDictionary headerMetadata(UniqueId fileId, boolean read,
+			int chunkTotal, int chunksReceived) {
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER);
 		meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
 		meta.put(MSG_KEY_FILE_NAME, "file.bin");
 		meta.put(MSG_KEY_CONTENT_TYPE, "application/octet-stream");
 		meta.put(MSG_KEY_FILE_SIZE, 2L);
-		meta.put(MSG_KEY_CHUNK_TOTAL, 1);
-		meta.put(MSG_KEY_CHUNKS_RECEIVED, 1);
+		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
+		meta.put(MSG_KEY_CHUNKS_RECEIVED, chunksReceived);
 		meta.put(MSG_KEY_LOCAL, true);
 		meta.put(MSG_KEY_READ, read);
 		meta.put(MSG_KEY_TIMESTAMP, 1L);
@@ -324,22 +509,33 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 	}
 
 	private BdfDictionary chunkMetadata(UniqueId fileId) {
+		return chunkMetadata(fileId, 0, 1);
+	}
+
+	private BdfDictionary chunkMetadata(UniqueId fileId, int chunkIndex,
+			int chunkTotal) {
 		BdfDictionary meta = new BdfDictionary();
 		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK);
 		meta.put(MSG_KEY_FILE_ID, fileId.getBytes());
-		meta.put(MSG_KEY_CHUNK_INDEX, 0);
-		meta.put(MSG_KEY_CHUNK_TOTAL, 1);
+		meta.put(MSG_KEY_CHUNK_INDEX, chunkIndex);
+		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
 		meta.put(MSG_KEY_LOCAL, true);
 		meta.put(MSG_KEY_TIMESTAMP, 2L);
 		return meta;
 	}
 
 	private void writeChunkFiles(File fileDir) throws Exception {
-		File chunk = new File(new File(fileDir, "chunks"), "chunk_0");
-		assertTrue(chunk.getParentFile().mkdirs());
+		writeChunkFiles(fileDir, 0, 1);
+	}
+
+	private void writeChunkFiles(File fileDir, int chunkIndex, int chunkTotal)
+			throws Exception {
+		File chunk = getChunkFile(fileDir, chunkIndex);
+		assertTrue(chunk.getParentFile().exists() ||
+				chunk.getParentFile().mkdirs());
 		writeBytes(chunk, new byte[] {1, 2});
-		writeBytes(new File(chunk.getParentFile(), chunk.getName() + ".total"),
-				new byte[] {'1'});
+		writeBytes(getChunkTotalFile(fileDir, chunkIndex),
+				Integer.toString(chunkTotal).getBytes("UTF-8"));
 	}
 
 	private File getFileDir(UniqueId fileId) throws Exception {
@@ -347,6 +543,37 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 				"getFileDir", UniqueId.class);
 		method.setAccessible(true);
 		return (File) method.invoke(manager, fileId);
+	}
+
+	private File getChunkFile(File fileDir, int chunkIndex) throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getChunkFile", File.class, int.class);
+		method.setAccessible(true);
+		return (File) method.invoke(manager, fileDir, chunkIndex);
+	}
+
+	private File getChunkTotalFile(File fileDir, int chunkIndex)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getChunkTotalFile", File.class, int.class);
+		method.setAccessible(true);
+		return (File) method.invoke(manager, fileDir, chunkIndex);
+	}
+
+	private File getAssembledFile(File fileDir, String fileName)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"getAssembledFile", File.class, String.class);
+		method.setAccessible(true);
+		return (File) method.invoke(manager, fileDir, fileName);
+	}
+
+	private int countExistingChunks(UniqueId fileId, File fileDir, int chunkTotal)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"countExistingChunks", UniqueId.class, File.class, int.class);
+		method.setAccessible(true);
+		return (Integer) method.invoke(manager, fileId, fileDir, chunkTotal);
 	}
 
 	private void runCommitTasks(Transaction txn) {

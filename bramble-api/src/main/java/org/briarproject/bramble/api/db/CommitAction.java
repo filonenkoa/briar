@@ -16,5 +16,9 @@ public interface CommitAction {
 
 		@EventExecutor
 		void visit(TaskAction a);
+
+		default void visit(SyncAction a) {
+			a.getTask().run();
+		}
 	}
 }

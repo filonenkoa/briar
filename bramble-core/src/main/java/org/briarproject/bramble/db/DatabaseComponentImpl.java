@@ -32,6 +32,7 @@ import org.briarproject.bramble.api.db.NoSuchPendingContactException;
 import org.briarproject.bramble.api.db.NoSuchTransportException;
 import org.briarproject.bramble.api.db.NullableDbCallable;
 import org.briarproject.bramble.api.db.PendingContactExistsException;
+import org.briarproject.bramble.api.db.SyncAction;
 import org.briarproject.bramble.api.db.TaskAction;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
@@ -1337,6 +1338,11 @@ class DatabaseComponentImpl<T> implements DatabaseComponent {
 		@Override
 		public void visit(TaskAction a) {
 			eventExecutor.execute(a.getTask());
+		}
+
+		@Override
+		public void visit(SyncAction a) {
+			a.getTask().run();
 		}
 	}
 }

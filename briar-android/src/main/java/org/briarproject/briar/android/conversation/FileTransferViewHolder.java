@@ -24,6 +24,7 @@ import static org.briarproject.briar.android.util.UiUtils.formatFileSize;
 class FileTransferViewHolder extends ConversationItemViewHolder {
 
 	private final ImageView fileIcon;
+	private final ImageView imagePreview;
 	private final TextView fileName;
 	private final TextView fileSize;
 	private final ProgressBar progressBar;
@@ -41,6 +42,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		super(v, listener, isIncoming);
 		this.lifecycleOwner = lifecycleOwner;
 		fileIcon = v.findViewById(R.id.fileIcon);
+		imagePreview = v.findViewById(R.id.imagePreview);
 		fileName = v.findViewById(R.id.fileName);
 		fileSize = v.findViewById(R.id.fileSize);
 		progressBar = v.findViewById(R.id.progressBar);
@@ -59,10 +61,10 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		itemView.setOnClickListener(view -> listener.onFileClicked(item));
 
 		LiveData<FileTransferProgress> liveData = item.getProgress();
-		Observer<FileTransferProgress> observer = this::bindProgress;
+		Observer<FileTransferProgress> observer = p -> bindProgress(item, p);
 		progressLiveData = liveData;
 		progressObserver = observer;
-		bindProgress(liveData.getValue());
+		bindProgress(item, liveData.getValue());
 		liveData.observe(lifecycleOwner, observer);
 	}
 
@@ -74,23 +76,40 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 		progressObserver = null;
 	}
 
-	private void bindProgress(@Nullable FileTransferProgress p) {
+	private void bindProgress(ConversationFileItem item,
+			@Nullable FileTransferProgress p) {
 		if (p == null) return;
 		int pct = p.getPercent();
 		State state = p.getState();
 		if (state == State.COMPLETE) {
 			progressBar.setVisibility(GONE);
 			progressText.setText(R.string.file_transfer_tap_to_open);
+			if (isImage(item)) {
+				imagePreview.setVisibility(VISIBLE);
+				imagePreview.setTag(item.getKey());
+				listener.onFilePreviewRequested(item, imagePreview);
+			} else {
+				imagePreview.setVisibility(GONE);
+				imagePreview.setTag(null);
+			}
 		} else if (state == State.ERROR) {
 			progressBar.setVisibility(GONE);
 			progressText.setText(R.string.file_transfer_error);
+			imagePreview.setVisibility(GONE);
+			imagePreview.setTag(null);
 		} else {
 			progressBar.setVisibility(VISIBLE);
 			progressBar.setProgress(pct);
+			imagePreview.setVisibility(GONE);
+			imagePreview.setTag(null);
 			progressText.setText(itemView.getContext().getString(
 					R.string.file_transfer_progress, pct,
 					formatFileSize(itemView.getContext(), p.getTransferred()),
 					formatFileSize(itemView.getContext(), p.getTotal())));
 		}
+	}
+
+	private boolean isImage(ConversationFileItem item) {
+		return item.getHeader().getContentType().startsWith("image/");
 	}
 }

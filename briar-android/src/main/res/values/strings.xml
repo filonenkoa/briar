@@ -178,6 +178,7 @@
 	<string name="message_error">Error sending message</string>
 	<string name="image_caption_hint">Add a caption (optional)</string>
 	<string name="image_attach">Attach image</string>
+	<string name="file_attach">Attach file</string>
 	<string name="image_attach_error">Could not attach image(s)</string>
 	<string name="image_attach_error_too_big">Image too big. Limit is %d MB.</string>
 	<string name="image_attach_error_invalid_mime_type">Image format unsupported: %s</string>

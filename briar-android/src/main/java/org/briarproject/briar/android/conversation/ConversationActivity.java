@@ -53,6 +53,7 @@ import org.briarproject.briar.android.blog.BlogActivity;
 import org.briarproject.briar.android.contact.connect.ConnectViaBluetoothActivity;
 import org.briarproject.briar.android.conversation.ConversationVisitor.AttachmentCache;
 import org.briarproject.briar.android.conversation.ConversationVisitor.TextCache;
+import org.briarproject.briar.android.conversation.glide.GlideApp;
 import org.briarproject.briar.android.forum.ForumActivity;
 import org.briarproject.briar.android.fragment.BaseFragment.BaseFragmentListener;
 import org.briarproject.briar.android.introduction.IntroductionActivity;
@@ -63,6 +64,7 @@ import org.briarproject.briar.android.util.ActivityLaunchers.OpenFileAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.OpenMultipleImageDocumentsAdvanced;
 import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.view.BriarRecyclerView;
+import org.briarproject.briar.android.view.CompositeSendButton;
 import org.briarproject.briar.android.view.ImagePreview;
 import org.briarproject.briar.android.view.TextAttachmentController;
 import org.briarproject.briar.android.view.TextAttachmentController.AttachmentListener;
@@ -328,6 +330,10 @@ public class ConversationActivity extends BriarActivity
 			sendController = new TextSendController(textInputView, this, false);
 		}
 		textInputView.setSendController(sendController);
+		CompositeSendButton compositeSendButton =
+				textInputView.findViewById(R.id.compositeSendButton);
+		compositeSendButton.setOnFileClickListener(view ->
+				fileLauncher.launch(new String[] {"*/*"}));
 		textInputView.setMaxTextLength(MAX_PRIVATE_MESSAGE_TEXT_LENGTH);
 		textInputView.setReady(false);
 		textInputView.setOnKeyboardShownListener(this::scrollToBottom);
@@ -820,9 +826,12 @@ public class ConversationActivity extends BriarActivity
 
 	@Override
 	public void onAttachImageClicked() {
-		// Repurpose the attach button to send any type of file as a
-		// chunked file transfer.
-		fileLauncher.launch(new String[] {"*/*"});
+		if (BuildConfig.FLAVOR.equals("googleplay") ||
+				BuildConfig.FLAVOR.equals("huawei")) {
+			contentLauncher.launch("image/*");
+		} else {
+			docLauncher.launch(new String[] {"image/*"});
+		}
 	}
 
 	private void onImagesChosen(@Nullable List<Uri> uris) {
@@ -838,6 +847,31 @@ public class ConversationActivity extends BriarActivity
 		openFile(item.getHeader());
 	}
 
+	@Override
+	public void onFilePreviewRequested(ConversationFileItem item,
+			ImageView imageView) {
+		String itemKey = item.getKey();
+		FileTransferHeader header = item.getHeader();
+		runOnDbThread(() -> {
+			try {
+				File dir = new File(getCacheDir(), "filetransfer");
+				if (!dir.exists() && !dir.mkdirs()) throw new IOException();
+				deleteOldCacheFiles(dir, FILE_TRANSFER_OPEN_CACHE_MAX_AGE_MS);
+				File out = getOpenCacheFile(dir, header);
+				if (!isFreshOpenCacheFile(out, header) &&
+						!copyFileTransferToCache(header, out, false)) {
+					return;
+				}
+				runOnUiThreadUnlessDestroyed(() -> {
+					if (!itemKey.equals(imageView.getTag())) return;
+					GlideApp.with(imageView).load(out).into(imageView);
+				});
+			} catch (DbException | IOException e) {
+				logException(LOG, WARNING, e);
+			}
+		});
+	}
+
 	private void openFile(FileTransferHeader h) {
 		runOnDbThread(() -> {
 			try {
@@ -846,7 +880,7 @@ public class ConversationActivity extends BriarActivity
 				deleteOldCacheFiles(dir, FILE_TRANSFER_OPEN_CACHE_MAX_AGE_MS);
 				File out = getOpenCacheFile(dir, h);
 				if (!isFreshOpenCacheFile(out, h) &&
-						!copyFileTransferToCache(h, out)) {
+						!copyFileTransferToCache(h, out, true)) {
 					return;
 				}
 				String mime = h.getContentType();
@@ -871,14 +905,17 @@ public class ConversationActivity extends BriarActivity
 		});
 	}
 
-	private boolean copyFileTransferToCache(FileTransferHeader h, File out)
+	private boolean copyFileTransferToCache(FileTransferHeader h, File out,
+			boolean showMissingFileError)
 			throws DbException, IOException {
 		File tmp = new File(out.getPath() + ".tmp");
 		boolean success = false;
 		try {
 			InputStream in = fileTransferManager.getFile(h);
 			if (in == null) {
-				showFileOpenError(R.string.file_transfer_open_failed);
+				if (showMissingFileError) {
+					showFileOpenError(R.string.file_transfer_open_failed);
+				}
 				return false;
 			}
 			try (InputStream i = in;
