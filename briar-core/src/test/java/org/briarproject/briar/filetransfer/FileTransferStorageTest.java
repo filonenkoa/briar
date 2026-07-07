@@ -254,6 +254,24 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testSuccessfulAssemblyDeletesChunkFiles() throws Exception {
+		File fileDir = new File(testDir, "cleanup");
+		assertTrue(fileDir.mkdirs());
+		writeChunk(fileDir, 0, 2, new byte[] {1, 2});
+		writeChunk(fileDir, 1, 2, new byte[] {3, 4});
+
+		assembleFile(fileDir, "file.bin", 2);
+
+		File assembled = getAssembledFile(fileDir, "file.bin");
+		assertTrue(assembled.exists());
+		assertArrayEquals(new byte[] {1, 2, 3, 4}, readBytes(assembled));
+		assertFalse(getChunkFile(fileDir, 0).exists());
+		assertFalse(getChunkTotalFile(fileDir, 0).exists());
+		assertFalse(getChunkFile(fileDir, 1).exists());
+		assertFalse(getChunkTotalFile(fileDir, 1).exists());
+	}
+
+	@Test
 	public void testSendFileTracksHeaderBeforeChunks() throws Exception {
 		Transaction txn = new Transaction(null, false);
 		Contact contact = getContact();

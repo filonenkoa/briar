@@ -356,7 +356,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		int chunkTotal = h.getInt(MSG_KEY_CHUNK_TOTAL);
 		File fileDir = getFileDir(fileId);
 		File assembled = getAssembledFile(fileDir, safeFileName(fileName));
-		if (assembled.exists()) return;
+		if (assembled.exists()) {
+			deleteRecursively(getChunksDir(fileDir));
+			return;
+		}
 		assembleFile(fileDir, fileName, chunkTotal);
 	}
 
@@ -396,6 +399,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			tmp.delete();
 			throw new DbException();
 		}
+		deleteRecursively(getChunksDir(fileDir));
 	}
 
 	private void copy(InputStream in, OutputStream out) throws IOException {
@@ -404,20 +408,24 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
 	}
 
-	private boolean deleteRecursively(File file) {
-		if (file.isDirectory()) {
-			File[] children = file.listFiles();
-			if (children != null) {
-				for (File child : children) {
-					if (!deleteRecursively(child)) return false;
-				}
+	private void deleteFileDir(UniqueId fileId) {
+		deleteRecursively(getFileDir(fileId));
+	}
+
+	private void deleteRecursively(File f) {
+		if (!f.exists()) return;
+		if (f.isDirectory()) {
+			File[] files = f.listFiles();
+			if (files != null) {
+				for (File child : files) deleteRecursively(child);
 			}
 		}
-		return !file.exists() || file.delete();
+		f.delete();
 	}
 
 	private void deleteAfterFailedSend(File fileDir) {
-		if (!deleteRecursively(fileDir)) {
+		deleteRecursively(fileDir);
+		if (fileDir.exists()) {
 			LOG.info("Could not delete failed file transfer");
 		}
 	}
@@ -755,10 +763,24 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	public DeletionResult deleteAllMessages(Transaction txn, ContactId c)
 			throws DbException {
 		GroupId g = getContactGroup(db.getContact(txn, c)).getId();
+		Set<UniqueId> fileIds = new HashSet<>();
+		try {
+			Map<MessageId, BdfDictionary> metadata =
+					clientHelper.getMessageMetadataAsDictionary(txn, g);
+			for (BdfDictionary meta : metadata.values()) {
+				if (MSG_TYPE_HEADER.equals(
+						meta.getOptionalString(MSG_KEY_MSG_TYPE))) {
+					fileIds.add(new UniqueId(meta.getRaw(MSG_KEY_FILE_ID)));
+				}
+			}
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
 		for (MessageId messageId : db.getMessageIds(txn, g)) {
 			db.deleteMessage(txn, messageId);
 			db.deleteMessageMetadata(txn, messageId);
 		}
+		for (UniqueId fileId : fileIds) deleteFileDir(fileId);
 		messageTracker.initializeGroupCount(txn, g);
 		return new DeletionResult();
 	}
@@ -767,20 +789,59 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	public DeletionResult deleteMessages(Transaction txn, ContactId c,
 			Set<MessageId> messageIds) throws DbException {
 		GroupId g = getContactGroup(db.getContact(txn, c)).getId();
-		for (MessageId m : messageIds) {
-			db.deleteMessage(txn, m);
-			db.deleteMessageMetadata(txn, m);
-		}
-		messageTracker.resetGroupCount(txn, g, 0, 0);
+		deleteMessages(txn, g, messageIds);
 		return new DeletionResult();
 	}
 
 	@Override
 	public void deleteMessages(Transaction txn, GroupId g,
 			Collection<MessageId> messageIds) throws DbException {
-		for (MessageId m : messageIds) {
+		try {
+			Set<MessageId> deleted = new HashSet<>();
+			for (MessageId m : messageIds) deleteMessage(txn, g, m, deleted);
+			recalculateGroupCount(txn, g);
+		} catch (FormatException e) {
+			throw new DbException(e);
+		}
+	}
+
+	private void deleteMessage(Transaction txn, GroupId g, MessageId m,
+			Set<MessageId> deleted) throws DbException, FormatException {
+		if (deleted.contains(m)) return;
+		BdfDictionary meta = clientHelper.getMessageMetadataAsDictionary(txn, m);
+		if (MSG_TYPE_HEADER.equals(meta.getOptionalString(MSG_KEY_MSG_TYPE))) {
+			UniqueId fileId = new UniqueId(meta.getRaw(MSG_KEY_FILE_ID));
+			BdfDictionary query = BdfDictionary.of(
+					new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()));
+			for (MessageId related : clientHelper.getMessageIds(txn, g, query)) {
+				deleteMessageRows(txn, related, deleted);
+			}
+			deleteFileDir(fileId);
+		} else {
+			deleteMessageRows(txn, m, deleted);
+		}
+	}
+
+	private void deleteMessageRows(Transaction txn, MessageId m,
+			Set<MessageId> deleted) throws DbException {
+		if (deleted.add(m)) {
 			db.deleteMessage(txn, m);
 			db.deleteMessageMetadata(txn, m);
 		}
+	}
+
+	private void recalculateGroupCount(Transaction txn, GroupId g)
+			throws DbException, FormatException {
+		Map<MessageId, BdfDictionary> metadata =
+				clientHelper.getMessageMetadataAsDictionary(txn, g);
+		int msgCount = 0;
+		int unreadCount = 0;
+		for (BdfDictionary meta : metadata.values()) {
+			if (MSG_TYPE_HEADER.equals(meta.getOptionalString(MSG_KEY_MSG_TYPE))) {
+				msgCount++;
+				if (!meta.getBoolean(MSG_KEY_READ, true)) unreadCount++;
+			}
+		}
+		messageTracker.resetGroupCount(txn, g, msgCount, unreadCount);
 	}
 }
