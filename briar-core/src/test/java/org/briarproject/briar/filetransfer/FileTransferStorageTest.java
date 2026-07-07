@@ -56,6 +56,7 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNKS_RECEIVED;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_ID;
+import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_FILE_NAME;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_MSG_TYPE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
@@ -185,6 +186,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		writeChunk(fileDir, 0, 2, new byte[] {1, 2, 3});
 
 		BdfDictionary header = new BdfDictionary();
+		header.put(MSG_KEY_FILE_NAME, "file.bin");
 		header.put(MSG_KEY_CHUNK_TOTAL, 2);
 		header.put(MSG_KEY_CHUNKS_RECEIVED, 0);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
@@ -286,6 +288,7 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		assembleFile(fileDir, "file.bin", 1);
 
 		BdfDictionary header = new BdfDictionary();
+		header.put(MSG_KEY_FILE_NAME, "file.bin");
 		header.put(MSG_KEY_CHUNK_TOTAL, 1);
 		header.put(MSG_KEY_CHUNKS_RECEIVED, 1);
 		Map<MessageId, BdfDictionary> headers = new HashMap<>();
@@ -300,6 +303,91 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 			never(clientHelper).getMessageAsList(txn, chunkMessageId);
 			never(clientHelper).mergeMessageMetadata(with(same(txn)),
 					with(any(MessageId.class)), with(any(BdfDictionary.class)));
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		assertFalse(getChunkFile(fileDir, 0).exists());
+		assertFalse(getChunkTotalFile(fileDir, 0).exists());
+	}
+
+	@Test
+	public void testStaleAssemblyTempDoesNotCompleteTransfer()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 1,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		File tmp = new File(getAssembledFile(fileDir, "file.bin")
+				.getParentFile(), "file.bin.tmp");
+		assertTrue(tmp.getParentFile().mkdirs());
+		writeBytes(tmp, new byte[] {9});
+
+		BdfDictionary header = new BdfDictionary();
+		header.put(MSG_KEY_FILE_NAME, "file.bin");
+		header.put(MSG_KEY_CHUNK_TOTAL, 2);
+		header.put(MSG_KEY_CHUNKS_RECEIVED, 0);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary repair = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+		BdfDictionary meta = chunkMetadata(fileId, 0, 2);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			oneOf(clientHelper).getMessageAsList(txn, chunkMessageId);
+			will(returnValue(BdfList.of(MSG_TYPE_CHUNK, fileId.getBytes(), 0, 2,
+					new byte[] {1, 2, 3})));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerMessageId,
+					repair);
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		assertTrue(getChunkFile(fileDir, 0).exists());
+		assertTrue(tmp.exists());
+	}
+
+	@Test
+	public void testAssembledFileRepairsIncompleteMetadata()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 1,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		File assembled = getAssembledFile(fileDir, "file.bin");
+		assertTrue(assembled.getParentFile().mkdirs());
+		writeBytes(assembled, new byte[] {1, 2, 3});
+
+		BdfDictionary header = new BdfDictionary();
+		header.put(MSG_KEY_FILE_NAME, "file.bin");
+		header.put(MSG_KEY_CHUNK_TOTAL, 1);
+		header.put(MSG_KEY_CHUNKS_RECEIVED, 0);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary repair = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_CHUNKS_RECEIVED, 1));
+		BdfDictionary meta = chunkMetadata(fileId, 0, 1);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			never(clientHelper).getMessageAsList(txn, chunkMessageId);
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerMessageId,
+					repair);
 		}});
 
 		incomingChunk(txn, chunkMessage, meta);

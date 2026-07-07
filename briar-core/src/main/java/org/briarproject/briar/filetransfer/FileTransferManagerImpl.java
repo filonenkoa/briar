@@ -157,9 +157,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		return new File(getAssembledDir(fileDir), fileName);
 	}
 
-	private boolean hasAssembledFile(File fileDir) {
-		File[] files = getAssembledDir(fileDir).listFiles();
-		return files != null && files.length > 0;
+	private boolean hasExpectedAssembledFile(File fileDir, BdfDictionary header)
+			throws FormatException {
+		String fileName = header.getString(MSG_KEY_FILE_NAME);
+		return getAssembledFile(fileDir, safeFileName(fileName)).exists();
 	}
 
 	private String safeFileName(String fileName) {
@@ -285,12 +286,17 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		Map<MessageId, BdfDictionary> headers =
 				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
 		boolean matchingHeader = false;
-		for (BdfDictionary h : headers.values()) {
+		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
+			BdfDictionary h = e.getValue();
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
 			if (chunkTotal == total && chunkIndex < total) {
 				matchingHeader = true;
-				if (h.getInt(MSG_KEY_CHUNKS_RECEIVED) >= total) return;
-				if (hasAssembledFile(fileDir)) return;
+				int received = h.getInt(MSG_KEY_CHUNKS_RECEIVED);
+				if (received >= total) return;
+				if (hasExpectedAssembledFile(fileDir, h)) {
+					setChunksReceived(txn, e.getKey(), total);
+					return;
+				}
 			}
 		}
 		if (!headers.isEmpty() && !matchingHeader) return;
@@ -341,10 +347,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		File fileDir = getFileDir(fileId);
 		int actualReceived = countExistingChunks(fileDir, chunkTotal);
 		if (actualReceived > received) {
-			BdfDictionary merge = new BdfDictionary();
-			merge.put(MSG_KEY_CHUNKS_RECEIVED, actualReceived);
-			clientHelper.mergeMessageMetadata(txn, m.getId(), merge);
+			setChunksReceived(txn, m.getId(), actualReceived);
 			received = actualReceived;
+		}
+		File assembled = getAssembledFile(fileDir, safeFileName(fileName));
+		if (assembled.exists() && received < chunkTotal) {
+			setChunksReceived(txn, m.getId(), chunkTotal);
+			received = chunkTotal;
 		}
 		FileTransferHeader header = new FileTransferHeader(m.getId(), groupId,
 				timestamp, local, false, false, false, NO_AUTO_DELETE_TIMER,
@@ -370,6 +379,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			return;
 		}
 		assembleFile(fileDir, fileName, chunkTotal);
+	}
+
+	private void setChunksReceived(Transaction txn, MessageId messageId,
+			int received) throws DbException, FormatException {
+		BdfDictionary merge = new BdfDictionary();
+		merge.put(MSG_KEY_CHUNKS_RECEIVED, received);
+		clientHelper.mergeMessageMetadata(txn, messageId, merge);
 	}
 
 	private void assembleFile(File fileDir, String fileName, int chunkTotal)
