@@ -21,6 +21,8 @@ import org.briarproject.briar.api.autodelete.AutoDeleteManager;
 import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.filetransfer.FileTransferHeader;
 import org.briarproject.briar.api.filetransfer.FileTransferManager;
+import org.briarproject.briar.api.filetransfer.FileTransferProgress;
+import org.briarproject.briar.api.filetransfer.FileTransferProgress.State;
 import org.briarproject.briar.api.identity.AuthorManager;
 import org.briarproject.briar.api.messaging.MessagingManager;
 import org.briarproject.briar.api.messaging.PrivateMessageFactory;
@@ -86,6 +88,8 @@ public class ConversationViewModelTest extends BrambleMockTestCase {
 
 		context.checking(new Expectations() {{
 			oneOf(lifecycleManager).waitForDatabase();
+			oneOf(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.TRANSFERRING)));
 			oneOf(fileTransferManager).cancelFileTransfer(h);
 		}});
 
@@ -98,10 +102,76 @@ public class ConversationViewModelTest extends BrambleMockTestCase {
 
 		context.checking(new Expectations() {{
 			oneOf(lifecycleManager).waitForDatabase();
+			oneOf(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.TRANSFERRING)));
 			oneOf(fileTransferManager).rejectFileTransfer(h);
 		}});
 
 		viewModel.stopFileTransfer(h);
+	}
+
+	@Test
+	public void testStopCompleteFileTransferDoesNothing() throws Exception {
+		FileTransferHeader h = header(true);
+
+		context.checking(new Expectations() {{
+			oneOf(lifecycleManager).waitForDatabase();
+			oneOf(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.COMPLETE)));
+			never(fileTransferManager).cancelFileTransfer(h);
+			never(fileTransferManager).rejectFileTransfer(h);
+		}});
+
+		viewModel.stopFileTransfer(h);
+	}
+
+	@Test
+	public void testStopCancelledFileTransferDoesNothing() throws Exception {
+		FileTransferHeader h = header(true);
+
+		context.checking(new Expectations() {{
+			oneOf(lifecycleManager).waitForDatabase();
+			oneOf(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.CANCELLED)));
+			never(fileTransferManager).cancelFileTransfer(h);
+			never(fileTransferManager).rejectFileTransfer(h);
+		}});
+
+		viewModel.stopFileTransfer(h);
+	}
+
+	@Test
+	public void testStopRejectedFileTransferDoesNothing() throws Exception {
+		FileTransferHeader h = header(false);
+
+		context.checking(new Expectations() {{
+			oneOf(lifecycleManager).waitForDatabase();
+			oneOf(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.REJECTED)));
+			never(fileTransferManager).cancelFileTransfer(h);
+			never(fileTransferManager).rejectFileTransfer(h);
+		}});
+
+		viewModel.stopFileTransfer(h);
+	}
+
+	@Test
+	public void testStopErroredFileTransferDoesNothing() throws Exception {
+		FileTransferHeader h = header(false);
+
+		context.checking(new Expectations() {{
+			oneOf(lifecycleManager).waitForDatabase();
+			oneOf(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.ERROR)));
+			never(fileTransferManager).cancelFileTransfer(h);
+			never(fileTransferManager).rejectFileTransfer(h);
+		}});
+
+		viewModel.stopFileTransfer(h);
+	}
+
+	private FileTransferProgress progress(State state) {
+		return new FileTransferProgress(state, 0, 12L);
 	}
 
 	private FileTransferHeader header(boolean local) {

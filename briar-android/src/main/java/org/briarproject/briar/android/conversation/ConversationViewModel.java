@@ -454,6 +454,9 @@ public class ConversationViewModel extends DbViewModel
 	void stopFileTransfer(FileTransferHeader h) {
 		runOnDbThread(() -> {
 			try {
+				FileTransferProgress p = fileTransferManager.getProgress(h);
+				if (p.getState() != FileTransferProgress.State.TRANSFERRING)
+					return;
 				if (h.isLocal()) {
 					fileTransferManager.cancelFileTransfer(h);
 				} else {
@@ -475,9 +478,7 @@ public class ConversationViewModel extends DbViewModel
 	LiveData<FileTransferProgress> getFileProgress(FileTransferHeader h) {
 		MutableLiveData<FileTransferProgress> live = fileProgress.get(h.getId());
 		if (live == null) {
-			live = new MutableLiveData<>(new FileTransferProgress(
-					FileTransferProgress.State.TRANSFERRING, 0,
-					h.getFileSize()));
+			live = new MutableLiveData<>();
 			if (cleared) return live;
 			fileProgress.put(h.getId(), live);
 			startFileProgressPolling(h, live);

@@ -86,7 +86,20 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 
 	private void bindProgress(ConversationFileItem item,
 			@Nullable FileTransferProgress p) {
-		if (p == null) return;
+		if (p == null) {
+			progressBar.setVisibility(VISIBLE);
+			progressBar.setProgress(0);
+			stopTransfer.setVisibility(GONE);
+			if (status != null) status.setVisibility(INVISIBLE);
+			imagePreview.setVisibility(GONE);
+			imagePreview.setTag(null);
+			progressText.setText(itemView.getContext().getString(
+					R.string.file_transfer_progress, 0,
+					formatFileSize(itemView.getContext(), 0),
+					formatFileSize(itemView.getContext(),
+							item.getHeader().getFileSize())));
+			return;
+		}
 		int pct = p.getPercent();
 		State state = p.getState();
 		if (state == State.COMPLETE) {
