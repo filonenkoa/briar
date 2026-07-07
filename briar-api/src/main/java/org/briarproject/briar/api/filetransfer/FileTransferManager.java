@@ -9,6 +9,8 @@ import org.briarproject.nullsafety.NotNullByDefault;
 import java.io.IOException;
 import java.io.InputStream;
 
+import javax.annotation.Nullable;
+
 @NotNullByDefault
 public interface FileTransferManager extends ConversationClient,
 		FileTransferConstants {
@@ -30,6 +32,7 @@ public interface FileTransferManager extends ConversationClient,
 	 * Returns the reassembled file contents for the given transfer, or null
 	 * if the transfer is not yet complete. The caller must close the stream.
 	 */
+	@Nullable
 	InputStream getFile(FileTransferHeader h) throws DbException, IOException;
 
 	/**
@@ -41,5 +44,6 @@ public interface FileTransferManager extends ConversationClient,
 	 * Returns the header for the given message id, or null if it is not a
 	 * file-transfer header.
 	 */
+	@Nullable
 	FileTransferHeader getFileTransferHeader(MessageId m) throws DbException;
 }
