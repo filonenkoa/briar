@@ -54,6 +54,7 @@
 						android:layout_height="18dp"
 						android:layout_marginEnd="3dp"
 						android:layout_marginRight="3dp"
+						android:importantForAccessibility="no"
 						android:src="@drawable/ic_transport_internet" />
 
 					<ImageView
@@ -62,12 +63,14 @@
 						android:layout_height="18dp"
 						android:layout_marginEnd="3dp"
 						android:layout_marginRight="3dp"
+						android:importantForAccessibility="no"
 						android:src="@drawable/ic_wifi_tethering" />
 
 					<ImageView
 						android:id="@+id/transportBluetooth"
 						android:layout_width="18dp"
 						android:layout_height="18dp"
+						android:importantForAccessibility="no"
 						android:src="@drawable/ic_transport_bluetooth" />
 
 				</LinearLayout>
