@@ -712,10 +712,12 @@ public class ConversationActivity extends BriarActivity
 		} else if (e instanceof ConversationMessageReceivedEvent) {
 			ConversationMessageReceivedEvent<?> p =
 					(ConversationMessageReceivedEvent<?>) e;
-			if (p.getContactId().equals(contactId)) {
-				LOG.info("Message received, adding");
-				onNewConversationMessage(p.getMessageHeader());
-			}
+			runOnUiThreadUnlessDestroyed(() -> {
+				if (p.getContactId().equals(contactId)) {
+					LOG.info("Message received, adding");
+					onNewConversationMessage(p.getMessageHeader());
+				}
+			});
 		} else if (e instanceof MessagesSentEvent) {
 			MessagesSentEvent m = (MessagesSentEvent) e;
 			if (m.getContactId().equals(contactId)) {
