@@ -648,15 +648,18 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
+		Set<MessageId> chunkIdSet = new HashSet<>(chunkIds);
 		int transferredChunks = 0;
-		for (MessageId id : chunkIds) {
-			MessageStatus status = db.getMessageStatus(txn, contactId, id);
-			if (status.isSent()) transferredChunks++;
+		for (MessageStatus s : db.getMessageStatus(txn, contactId, groupId)) {
+			if (chunkIdSet.contains(s.getMessageId()) && s.isSent()) {
+				transferredChunks++;
+			}
 		}
 		int chunkTotal = h.getChunkTotal();
 		State state =
 				transferredChunks >= chunkTotal ? State.COMPLETE : State.TRANSFERRING;
-		long transferred = (long) transferredChunks * CHUNK_SIZE;
+		long transferred = Math.min(h.getFileSize(),
+				(long) transferredChunks * CHUNK_SIZE);
 		return new FileTransferProgress(state, transferred, h.getFileSize());
 	}
 
@@ -681,7 +684,8 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		int chunkTotal = h.getChunkTotal();
 		State state =
 				received >= chunkTotal ? State.COMPLETE : State.TRANSFERRING;
-		long transferred = (long) received * CHUNK_SIZE;
+		long transferred = Math.min(h.getFileSize(),
+				(long) received * CHUNK_SIZE);
 		return new FileTransferProgress(state, transferred, h.getFileSize());
 	}
 

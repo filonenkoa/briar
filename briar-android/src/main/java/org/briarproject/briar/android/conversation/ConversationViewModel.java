@@ -472,7 +472,9 @@ public class ConversationViewModel extends DbViewModel
 							|| p.getState() == FileTransferProgress.State.ERROR) {
 						fileProgress.remove(h.getId());
 					} else {
-						fileHandler.postDelayed(this, 1000);
+						long delay = h.getFileSize() > 1024L * 1024 * 1024 ?
+								2000L : 1000L;
+						fileHandler.postDelayed(this, delay);
 					}
 				});
 			}
