@@ -29,9 +29,9 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 	private final TextView progressText;
 
 	@Nullable
-	private LiveData<FileTransferProgress> observed = null;
-	private final Observer<FileTransferProgress> progressObserver =
-			this::bindProgress;
+	private LiveData<FileTransferProgress> progressLiveData = null;
+	@Nullable
+	private Observer<FileTransferProgress> progressObserver = null;
 
 	FileTransferViewHolder(View v, ConversationListener listener,
 			boolean isIncoming) {
@@ -45,6 +45,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 
 	@Override
 	void bind(ConversationItem conversationItem, boolean selected) {
+		unbind();
 		super.bind(conversationItem, selected);
 		ConversationFileItem item = (ConversationFileItem) conversationItem;
 
@@ -53,10 +54,20 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 				item.getHeader().getFileSize()));
 		itemView.setOnClickListener(view -> listener.onFileClicked(item));
 
-		if (observed != null) observed.removeObserver(progressObserver);
-		observed = item.getProgress();
-		bindProgress(observed.getValue());
-		observed.observeForever(progressObserver);
+		LiveData<FileTransferProgress> liveData = item.getProgress();
+		Observer<FileTransferProgress> observer = this::bindProgress;
+		progressLiveData = liveData;
+		progressObserver = observer;
+		bindProgress(liveData.getValue());
+		liveData.observeForever(observer);
+	}
+
+	void unbind() {
+		if (progressLiveData != null && progressObserver != null) {
+			progressLiveData.removeObserver(progressObserver);
+		}
+		progressLiveData = null;
+		progressObserver = null;
 	}
 
 	private void bindProgress(@Nullable FileTransferProgress p) {

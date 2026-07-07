@@ -55,6 +55,7 @@ import org.briarproject.briar.api.messaging.event.AttachmentReceivedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -113,6 +114,7 @@ public class ConversationViewModel extends DbViewModel
 	private final Handler fileHandler = new Handler(Looper.getMainLooper());
 	private final Map<MessageId, MutableLiveData<FileTransferProgress>> fileProgress =
 			new ConcurrentHashMap<>();
+	private final Map<MessageId, Runnable> fileProgressPollers = new HashMap<>();
 
 	@Nullable
 	private ContactId contactId = null;
@@ -176,6 +178,11 @@ public class ConversationViewModel extends DbViewModel
 		super.onCleared();
 		attachmentCreator.cancel();  // also deletes unsent attachments
 		eventBus.removeListener(this);
+		for (Runnable r : fileProgressPollers.values()) {
+			fileHandler.removeCallbacks(r);
+		}
+		fileProgressPollers.clear();
+		fileProgress.clear();
 	}
 
 	@Override
@@ -452,6 +459,7 @@ public class ConversationViewModel extends DbViewModel
 
 	private void startFileProgressPolling(FileTransferHeader h,
 			MutableLiveData<FileTransferProgress> live) {
+		MessageId id = h.getId();
 		Runnable poll = new Runnable() {
 			@Override
 			public void run() {
@@ -467,18 +475,24 @@ public class ConversationViewModel extends DbViewModel
 								FileTransferProgress.State.ERROR, transferred,
 								h.getFileSize());
 					}
-					live.postValue(p);
-					if (p.getState() == FileTransferProgress.State.COMPLETE
-							|| p.getState() == FileTransferProgress.State.ERROR) {
-						fileProgress.remove(h.getId());
-					} else {
-						long delay = h.getFileSize() > 1024L * 1024 * 1024 ?
-								2000L : 1000L;
-						fileHandler.postDelayed(this, delay);
-					}
+					FileTransferProgress progress = p;
+					fileHandler.post(() -> {
+						if (fileProgressPollers.get(id) != this) return;
+						live.setValue(progress);
+						if (progress.getState() == FileTransferProgress.State.COMPLETE
+								|| progress.getState() == FileTransferProgress.State.ERROR) {
+							fileProgress.remove(id);
+							fileProgressPollers.remove(id);
+						} else {
+							long delay = h.getFileSize() > 1024L * 1024 * 1024 ?
+									2000L : 1000L;
+							fileHandler.postDelayed(this, delay);
+						}
+					});
 				});
 			}
 		};
+		fileProgressPollers.put(id, poll);
 		fileHandler.post(poll);
 	}
 

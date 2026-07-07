@@ -99,6 +99,14 @@ class ConversationAdapter
 	}
 
 	@Override
+	public void onViewRecycled(ConversationItemViewHolder holder) {
+		if (holder instanceof FileTransferViewHolder) {
+			((FileTransferViewHolder) holder).unbind();
+		}
+		super.onViewRecycled(holder);
+	}
+
+	@Override
 	public int compare(ConversationItem c1, ConversationItem c2) {
 		return Long.compare(c1.getTime(), c2.getTime());
 	}
