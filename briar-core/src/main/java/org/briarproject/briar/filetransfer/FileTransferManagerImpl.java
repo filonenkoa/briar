@@ -94,6 +94,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	private static final Logger LOG =
 			getLogger(FileTransferManagerImpl.class.getName());
 	private static final String STORAGE_SUBDIR = "filetransfer";
+	private static final int GROUP_STATUS_SCAN_THRESHOLD = 1024;
 
 	private final DatabaseComponent db;
 	private final ClientHelper clientHelper;
@@ -648,11 +649,19 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		} catch (FormatException e) {
 			throw new DbException(e);
 		}
-		Set<MessageId> chunkIdSet = new HashSet<>(chunkIds);
 		int transferredChunks = 0;
-		for (MessageStatus s : db.getMessageStatus(txn, contactId, groupId)) {
-			if (chunkIdSet.contains(s.getMessageId()) && s.isSent()) {
-				transferredChunks++;
+		if (chunkIds.size() <= GROUP_STATUS_SCAN_THRESHOLD) {
+			for (MessageId id : chunkIds) {
+				MessageStatus s = db.getMessageStatus(txn, contactId, id);
+				if (s.isSent()) transferredChunks++;
+			}
+		} else {
+			Collection<MessageId> chunkIdSet = chunkIds instanceof Set ?
+					chunkIds : new HashSet<>(chunkIds);
+			for (MessageStatus s : db.getMessageStatus(txn, contactId, groupId)) {
+				if (chunkIdSet.contains(s.getMessageId()) && s.isSent()) {
+					transferredChunks++;
+				}
 			}
 		}
 		int chunkTotal = h.getChunkTotal();
