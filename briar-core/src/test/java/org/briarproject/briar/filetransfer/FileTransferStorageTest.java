@@ -272,6 +272,43 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testDuplicateChunkAfterAssemblyDoesNotRecreateChunk()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkMessageId = new MessageId(getRandomId());
+		MessageId headerMessageId = new MessageId(getRandomId());
+		Message chunkMessage = new Message(chunkMessageId, groupId, 2,
+				new byte[] {1});
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 1, new byte[] {1, 2, 3});
+		assembleFile(fileDir, "file.bin", 1);
+
+		BdfDictionary header = new BdfDictionary();
+		header.put(MSG_KEY_CHUNK_TOTAL, 1);
+		header.put(MSG_KEY_CHUNKS_RECEIVED, 1);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(headerMessageId, header);
+		BdfDictionary meta = chunkMetadata(fileId, 0, 1);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(
+					with(same(txn)), with(equal(groupId)),
+					with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			never(clientHelper).getMessageAsList(txn, chunkMessageId);
+			never(clientHelper).mergeMessageMetadata(with(same(txn)),
+					with(any(MessageId.class)), with(any(BdfDictionary.class)));
+		}});
+
+		incomingChunk(txn, chunkMessage, meta);
+
+		assertFalse(getChunkFile(fileDir, 0).exists());
+		assertFalse(getChunkTotalFile(fileDir, 0).exists());
+	}
+
+	@Test
 	public void testSendFileTracksHeaderBeforeChunks() throws Exception {
 		Transaction txn = new Transaction(null, false);
 		Contact contact = getContact();

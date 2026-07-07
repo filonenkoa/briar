@@ -157,6 +157,11 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		return new File(getAssembledDir(fileDir), fileName);
 	}
 
+	private boolean hasAssembledFile(File fileDir) {
+		File[] files = getAssembledDir(fileDir).listFiles();
+		return files != null && files.length > 0;
+	}
+
 	private String safeFileName(String fileName) {
 		String name = new File(fileName).getName();
 		if (name.isEmpty() || name.equals(".") || name.equals("..")) {
@@ -272,6 +277,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		UniqueId fileId = new UniqueId(metaDict.getRaw(MSG_KEY_FILE_ID));
 		int chunkIndex = metaDict.getInt(MSG_KEY_CHUNK_INDEX);
 		int chunkTotal = metaDict.getInt(MSG_KEY_CHUNK_TOTAL);
+		File fileDir = getFileDir(fileId);
 		// Find the header message for this file and increment its received count
 		BdfDictionary query = BdfDictionary.of(
 				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
@@ -281,10 +287,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		boolean matchingHeader = false;
 		for (BdfDictionary h : headers.values()) {
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
-			if (chunkTotal == total && chunkIndex < total) matchingHeader = true;
+			if (chunkTotal == total && chunkIndex < total) {
+				matchingHeader = true;
+				if (h.getInt(MSG_KEY_CHUNKS_RECEIVED) >= total) return;
+				if (hasAssembledFile(fileDir)) return;
+			}
 		}
 		if (!headers.isEmpty() && !matchingHeader) return;
-		File fileDir = getFileDir(fileId);
 		boolean duplicate = chunkExistsWithTotal(fileDir, chunkIndex, chunkTotal);
 		boolean stored = false;
 		if (!duplicate) {
@@ -410,6 +419,10 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 
 	private void deleteFileDir(UniqueId fileId) {
 		deleteRecursively(getFileDir(fileId));
+	}
+
+	private void scheduleDeleteFileDir(Transaction txn, UniqueId fileId) {
+		txn.attach(() -> deleteFileDir(fileId));
 	}
 
 	private void deleteRecursively(File f) {
@@ -768,10 +781,8 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			Map<MessageId, BdfDictionary> metadata =
 					clientHelper.getMessageMetadataAsDictionary(txn, g);
 			for (BdfDictionary meta : metadata.values()) {
-				if (MSG_TYPE_HEADER.equals(
-						meta.getOptionalString(MSG_KEY_MSG_TYPE))) {
-					fileIds.add(new UniqueId(meta.getRaw(MSG_KEY_FILE_ID)));
-				}
+				byte[] fileId = meta.getOptionalRaw(MSG_KEY_FILE_ID);
+				if (fileId != null) fileIds.add(new UniqueId(fileId));
 			}
 		} catch (FormatException e) {
 			throw new DbException(e);
@@ -780,7 +791,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			db.deleteMessage(txn, messageId);
 			db.deleteMessageMetadata(txn, messageId);
 		}
-		for (UniqueId fileId : fileIds) deleteFileDir(fileId);
+		for (UniqueId fileId : fileIds) scheduleDeleteFileDir(txn, fileId);
 		messageTracker.initializeGroupCount(txn, g);
 		return new DeletionResult();
 	}
@@ -798,7 +809,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			Collection<MessageId> messageIds) throws DbException {
 		try {
 			Set<MessageId> deleted = new HashSet<>();
-			for (MessageId m : messageIds) deleteMessage(txn, g, m, deleted);
+			Set<UniqueId> fileIdsToDelete = new HashSet<>();
+			for (MessageId m : messageIds) {
+				deleteMessage(txn, g, m, deleted, fileIdsToDelete);
+			}
+			for (UniqueId fileId : fileIdsToDelete) {
+				scheduleDeleteFileDir(txn, fileId);
+			}
 			recalculateGroupCount(txn, g);
 		} catch (FormatException e) {
 			throw new DbException(e);
@@ -806,7 +823,8 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	}
 
 	private void deleteMessage(Transaction txn, GroupId g, MessageId m,
-			Set<MessageId> deleted) throws DbException, FormatException {
+			Set<MessageId> deleted, Set<UniqueId> fileIdsToDelete)
+			throws DbException, FormatException {
 		if (deleted.contains(m)) return;
 		BdfDictionary meta = clientHelper.getMessageMetadataAsDictionary(txn, m);
 		if (MSG_TYPE_HEADER.equals(meta.getOptionalString(MSG_KEY_MSG_TYPE))) {
@@ -816,7 +834,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 			for (MessageId related : clientHelper.getMessageIds(txn, g, query)) {
 				deleteMessageRows(txn, related, deleted);
 			}
-			deleteFileDir(fileId);
+			fileIdsToDelete.add(fileId);
 		} else {
 			deleteMessageRows(txn, m, deleted);
 		}

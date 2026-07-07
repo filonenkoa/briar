@@ -7,8 +7,11 @@ import org.briarproject.bramble.api.contact.Contact;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.MetadataParser;
+import org.briarproject.bramble.api.db.CommitAction;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
+import org.briarproject.bramble.api.db.EventAction;
+import org.briarproject.bramble.api.db.TaskAction;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.sync.Group;
@@ -132,6 +135,9 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 		manager.deleteMessages(txn, contact.getId(),
 				Collections.singleton(headerId));
 
+		assertTrue(fileDir.exists());
+		runCommitTasks(txn);
+
 		assertFalse(fileDir.exists());
 	}
 
@@ -174,8 +180,46 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 
 		manager.deleteAllMessages(txn, contact.getId());
 
+		assertTrue(fileDir1.exists());
+		assertTrue(fileDir2.exists());
+		runCommitTasks(txn);
+
 		assertFalse(fileDir1.exists());
 		assertFalse(fileDir2.exists());
+	}
+
+	@Test
+	public void testDeleteAllMessagesDeletesOrphanChunkDirectory()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		File fileDir = getFileDir(fileId);
+		writeChunkFiles(fileDir);
+
+		Map<MessageId, BdfDictionary> metadata = new HashMap<>();
+		metadata.put(chunkId, chunkMetadata(fileId));
+
+		expectContactGroup(txn, contact, group);
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(metadata));
+			oneOf(db).getMessageIds(txn, group.getId());
+			will(returnValue(Collections.singletonList(chunkId)));
+			oneOf(db).deleteMessage(txn, chunkId);
+			oneOf(db).deleteMessageMetadata(txn, chunkId);
+			oneOf(messageTracker).initializeGroupCount(txn, group.getId());
+		}});
+
+		manager.deleteAllMessages(txn, contact.getId());
+
+		assertTrue(fileDir.exists());
+		runCommitTasks(txn);
+
+		assertFalse(fileDir.exists());
 	}
 
 	private void expectContactGroup(Transaction txn, Contact contact, Group group)
@@ -229,5 +273,21 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 				"getFileDir", UniqueId.class);
 		method.setAccessible(true);
 		return (File) method.invoke(manager, fileId);
+	}
+
+	private void runCommitTasks(Transaction txn) {
+		for (CommitAction action : txn.getActions()) {
+			action.accept(new CommitAction.Visitor() {
+				@Override
+				public void visit(EventAction a) {
+					throw new AssertionError();
+				}
+
+				@Override
+				public void visit(TaskAction a) {
+					a.getTask().run();
+				}
+			});
+		}
 	}
 }
