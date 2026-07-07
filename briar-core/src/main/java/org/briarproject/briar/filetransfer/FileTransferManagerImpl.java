@@ -326,12 +326,14 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		Map<MessageId, BdfDictionary> headers =
 				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
 		boolean matchingHeader = false;
+		boolean terminalHeader = false;
 		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
 			BdfDictionary h = e.getValue();
 			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
 			if (chunkTotal == total && chunkIndex < total) {
 				matchingHeader = true;
 				if (isTerminal(h)) {
+					terminalHeader = true;
 					scheduleDeleteFileDir(txn, fileId);
 					return;
 				}
@@ -342,6 +344,11 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 					return;
 				}
 			}
+		}
+		if (!terminalHeader && hasApplicableControl(txn, groupId, fileId,
+				headers, chunkTotal, chunkIndex)) {
+			scheduleDeleteFileDir(txn, fileId);
+			return;
 		}
 		if (!headers.isEmpty() && !matchingHeader) return;
 		DeletedChunk chunk = new DeletedChunk(fileId, chunkIndex, chunkTotal);
@@ -404,7 +411,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		boolean read = metaDict.getBoolean(MSG_KEY_READ);
 		int received = metaDict.getInt(MSG_KEY_CHUNKS_RECEIVED);
 		String transferState = getLatestControlTransferState(txn, groupId,
-				fileId);
+				fileId, local);
 		boolean terminal = transferState != null;
 		File fileDir = getFileDir(fileId);
 		if (terminal) {
@@ -447,22 +454,63 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 
 	@Nullable
 	private String getLatestControlTransferState(Transaction txn, GroupId groupId,
-			UniqueId fileId) throws DbException, FormatException {
+			UniqueId fileId, boolean local) throws DbException, FormatException {
+		return getLatestControlTransferState(getControls(txn, groupId, fileId),
+				local);
+	}
+
+	private Map<MessageId, BdfDictionary> getControls(Transaction txn,
+			GroupId groupId, UniqueId fileId) throws DbException, FormatException {
 		BdfDictionary query = BdfDictionary.of(
 				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
 				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_CONTROL));
-		Map<MessageId, BdfDictionary> controls =
-				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
+		return clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
+	}
+
+	@Nullable
+	private String getLatestControlTransferState(
+			Map<MessageId, BdfDictionary> controls, boolean local)
+			throws FormatException {
 		String latestState = null;
 		long latestTimestamp = Long.MIN_VALUE;
 		for (BdfDictionary control : controls.values()) {
+			String transferState = control.getString(MSG_KEY_TRANSFER_STATE);
+			if (!isControlApplicable(transferState, local)) continue;
 			long timestamp = control.getLong(MSG_KEY_TIMESTAMP);
 			if (latestState == null || timestamp > latestTimestamp) {
-				latestState = control.getString(MSG_KEY_TRANSFER_STATE);
+				latestState = transferState;
 				latestTimestamp = timestamp;
 			}
 		}
 		return latestState;
+	}
+
+	private boolean hasApplicableControl(Transaction txn, GroupId groupId,
+			UniqueId fileId, Map<MessageId, BdfDictionary> headers,
+			int chunkTotal, int chunkIndex) throws DbException, FormatException {
+		Map<MessageId, BdfDictionary> controls = getControls(txn, groupId, fileId);
+		if (headers.isEmpty()) {
+			return getLatestControlTransferState(controls, false) != null;
+		}
+		for (BdfDictionary h : headers.values()) {
+			int total = h.getInt(MSG_KEY_CHUNK_TOTAL);
+			if (chunkTotal != total || chunkIndex >= total) continue;
+			boolean local = h.getBoolean(MSG_KEY_LOCAL);
+			if (getLatestControlTransferState(controls, local) != null) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean isControlApplicable(String transferState, boolean local) {
+		if (TRANSFER_STATE_REJECTED_BY_RECEIVER.equals(transferState)) {
+			return local;
+		}
+		if (TRANSFER_STATE_CANCELLED_BY_SENDER.equals(transferState)) {
+			return !local;
+		}
+		return false;
 	}
 
 	private void incomingControl(Transaction txn, Message m,
@@ -475,8 +523,11 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER));
 		Map<MessageId, BdfDictionary> headers =
 				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
-		for (MessageId headerId : headers.keySet()) {
-			setTransferState(txn, headerId, transferState);
+		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
+			boolean local = e.getValue().getBoolean(MSG_KEY_LOCAL);
+			if (isControlApplicable(transferState, local)) {
+				setTransferState(txn, e.getKey(), transferState);
+			}
 		}
 		invalidateOutgoingProgressCache(fileId);
 		scheduleDeleteFileDir(txn, fileId);
