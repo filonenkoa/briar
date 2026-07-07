@@ -523,12 +523,16 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_HEADER));
 		Map<MessageId, BdfDictionary> headers =
 				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
+		boolean updated = false;
 		for (Entry<MessageId, BdfDictionary> e : headers.entrySet()) {
 			boolean local = e.getValue().getBoolean(MSG_KEY_LOCAL);
 			if (isControlApplicable(transferState, local)) {
 				setTransferState(txn, e.getKey(), transferState);
+				updated = true;
 			}
 		}
+		if (!updated && !(headers.isEmpty() &&
+				isControlApplicable(transferState, false))) return;
 		invalidateOutgoingProgressCache(fileId);
 		scheduleDeleteFileDir(txn, fileId);
 	}

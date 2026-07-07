@@ -952,6 +952,39 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testIncomingControlWrongDirectionDoesNotDeleteActiveFile()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		UniqueId fileId = new UniqueId(getRandomId());
+		Message control = new Message(new MessageId(getRandomId()), groupId, 1,
+				new byte[] {1});
+		MessageId incomingHeaderId = new MessageId(getRandomId());
+		BdfDictionary controlMeta = controlMetadata(fileId,
+				TRANSFER_STATE_REJECTED_BY_RECEIVER, 1L);
+		BdfDictionary incomingHeader = headerMetadata(fileId, "file.bin", 2L, 1,
+				0);
+		Map<MessageId, BdfDictionary> headers = new HashMap<>();
+		headers.put(incomingHeaderId, incomingHeader);
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 1, new byte[] {1, 2});
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(groupId)), with(any(BdfDictionary.class)));
+			will(returnValue(headers));
+			never(clientHelper).mergeMessageMetadata(with(same(txn)),
+					with(equal(incomingHeaderId)), with(any(BdfDictionary.class)));
+		}});
+
+		incomingControl(txn, control, controlMeta);
+		runCommitTasks(txn);
+
+		assertTrue(getChunkFile(fileDir, 0).exists());
+		assertTrue(getChunkTotalFile(fileDir, 0).exists());
+	}
+
+	@Test
 	public void testIncomingHeaderAppliesEarlierControlAndIgnoresChunks()
 			throws Exception {
 		Transaction txn = new Transaction(null, false);
