@@ -61,6 +61,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.util.logging.Logger;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 import javax.inject.Inject;
 
@@ -390,6 +391,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	}
 
 	@Override
+	@Nullable
 	public InputStream getFile(FileTransferHeader h)
 			throws DbException, IOException {
 		UniqueId fileId = h.getFileId();
@@ -463,6 +465,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	}
 
 	@Override
+	@Nullable
 	public FileTransferHeader getFileTransferHeader(MessageId m)
 			throws DbException {
 		return db.transactionWithResult(true,
