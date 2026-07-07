@@ -288,7 +288,6 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		boolean duplicate = chunkExistsWithTotal(fileDir, chunkIndex, chunkTotal);
 		boolean stored = false;
 		if (!duplicate) {
-			if (getChunkFile(fileDir, chunkIndex).exists()) return;
 			BdfList body = clientHelper.getMessageAsList(txn, m.getId());
 			byte[] payload = body.getRaw(4);
 			stored = writeChunk(fileDir, chunkIndex, chunkTotal, payload);
@@ -419,11 +418,32 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 
 	private boolean writeChunk(File fileDir, int chunkIndex, int chunkTotal,
 			byte[] payload) throws DbException {
-		if (getChunkFile(fileDir, chunkIndex).exists()) return false;
-		writeBytes(getChunkFile(fileDir, chunkIndex), payload);
-		writeBytes(getChunkTotalFile(fileDir, chunkIndex),
-				Integer.toString(chunkTotal).getBytes(StandardCharsets.UTF_8));
-		return true;
+		File chunk = getChunkFile(fileDir, chunkIndex);
+		File total = getChunkTotalFile(fileDir, chunkIndex);
+		if (chunk.exists()) {
+			if (chunkExistsWithTotal(fileDir, chunkIndex, chunkTotal)) return false;
+			if (total.exists()) return false;
+			if (!chunk.delete()) throw new DbException();
+		} else if (total.exists() && !total.delete()) {
+			throw new DbException();
+		}
+		File chunkTmp = new File(chunk.getParentFile(), chunk.getName() + ".tmp");
+		File totalTmp = new File(total.getParentFile(), total.getName() + ".tmp");
+		byte[] totalBytes = Integer.toString(chunkTotal)
+				.getBytes(StandardCharsets.UTF_8);
+		try {
+			writeBytes(chunkTmp, payload);
+			writeBytes(totalTmp, totalBytes);
+			if (!totalTmp.renameTo(total)) throw new IOException();
+			if (!chunkTmp.renameTo(chunk)) throw new IOException();
+			return true;
+		} catch (IOException | DbException e) {
+			chunkTmp.delete();
+			totalTmp.delete();
+			if (!chunk.exists()) total.delete();
+			if (e instanceof DbException) throw (DbException) e;
+			throw new DbException(e);
+		}
 	}
 
 	@Override

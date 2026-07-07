@@ -202,6 +202,24 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testOrphanChunkWithoutTotalIsRecoverable()
+			throws Exception {
+		File fileDir = new File(testDir, "orphan");
+		File chunk = getChunkFile(fileDir, 0);
+		assertTrue(chunk.getParentFile().exists() ||
+				chunk.getParentFile().mkdirs());
+		writeBytes(chunk, new byte[] {9});
+		assertFalse(getChunkTotalFile(fileDir, 0).exists());
+
+		writeChunk(fileDir, 0, 2, new byte[] {1, 2, 3});
+
+		assertArrayEquals(new byte[] {1, 2, 3}, readBytes(chunk));
+		assertArrayEquals(new byte[] {'2'}, readBytes(getChunkTotalFile(fileDir,
+				0)));
+		assertEquals(1, countExistingChunks(fileDir, 2));
+	}
+
+	@Test
 	public void testZeroByteAssemblyUsesSafeFileName() throws Exception {
 		File fileDir = new File(testDir, "zero");
 		assertTrue(fileDir.mkdirs());
