@@ -45,6 +45,7 @@
 					android:layout_height="match_parent"
 					android:layout_marginStart="6dp"
 					android:layout_marginLeft="6dp"
+					android:contentDescription="@string/transport_status_all_inactive"
 					android:gravity="center_vertical"
 					android:orientation="horizontal">
 

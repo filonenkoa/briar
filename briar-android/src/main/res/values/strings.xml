@@ -156,6 +156,7 @@
 	<string name="transport_status_wifi_inactive">Wi-Fi inactive</string>
 	<string name="transport_status_bluetooth_active">Bluetooth active</string>
 	<string name="transport_status_bluetooth_inactive">Bluetooth inactive</string>
+	<string name="transport_status_all_inactive">Internet inactive, Wi-Fi inactive, Bluetooth inactive</string>
 	<string name="transport_status_summary">%1$s, %2$s, %3$s</string>
 	<string name="send">Send</string>
 	<string name="allow">Allow</string>
