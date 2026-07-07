@@ -468,16 +468,28 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 	public FileTransferHeader sendFile(ContactId c, String fileName,
 			String contentType, long fileSize, InputStream in)
 			throws DbException, IOException {
-		return db.transactionWithResult(false,
-				txn -> sendFile(txn, c, fileName, contentType, fileSize, in));
+		UniqueId fileId = generateFileId();
+		try {
+			return db.transactionWithResult(false, txn -> sendFile(txn, c,
+					fileName, contentType, fileSize, in, fileId));
+		} catch (DbException | IOException e) {
+			deleteAfterFailedSend(getFileDir(fileId));
+			throw e;
+		}
 	}
 
 	private FileTransferHeader sendFile(Transaction txn, ContactId c,
 			String fileName, String contentType, long fileSize, InputStream in)
 			throws DbException, IOException {
+		return sendFile(txn, c, fileName, contentType, fileSize, in,
+				generateFileId());
+	}
+
+	private FileTransferHeader sendFile(Transaction txn, ContactId c,
+			String fileName, String contentType, long fileSize, InputStream in,
+			UniqueId fileId) throws DbException, IOException {
 		if (fileSize < 0 || fileSize > MAX_FILE_SIZE) throw new IOException();
 		GroupId groupId = getContactGroup(db.getContact(txn, c)).getId();
-		UniqueId fileId = generateFileId();
 		int chunkTotal = fileSize == 0 ? 0 :
 				(int) ((fileSize + CHUNK_SIZE - 1) / CHUNK_SIZE);
 		File fileDir = getFileDir(fileId);

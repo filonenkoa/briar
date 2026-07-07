@@ -9,8 +9,10 @@ import org.briarproject.bramble.api.data.BdfDictionary;
 import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.data.BdfList;
 import org.briarproject.bramble.api.data.MetadataParser;
+import org.briarproject.bramble.api.db.DbCallable;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseConfig;
+import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.sync.Group;
@@ -22,8 +24,11 @@ import org.briarproject.bramble.test.BrambleMockTestCase;
 import org.briarproject.briar.api.client.MessageTracker;
 import org.briarproject.briar.api.conversation.ConversationManager;
 import org.briarproject.briar.api.filetransfer.FileTransferHeader;
+import org.hamcrest.Description;
 import org.jmock.Expectations;
 import org.jmock.Sequence;
+import org.jmock.api.Action;
+import org.jmock.api.Invocation;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -324,6 +329,50 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		} catch (IOException expected) {
 			assertTrue(expected.getMessage().contains(
 					"Expected " + (CHUNK_SIZE + 1L) + " bytes"));
+		}
+
+		File storageDir = new File(testDir, "filetransfer");
+		File[] files = storageDir.listFiles();
+		assertTrue(files == null || files.length == 0);
+	}
+
+	@Test
+	public void testSendFileCleansUpFilesAfterTransactionFailure()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		Message message = new Message(new MessageId(getRandomId()),
+				group.getId(), 1, new byte[] {1});
+
+		expectSendSetup(txn, contact, group);
+		expectAnyLocalMessages(txn, group, message);
+		context.checking(new Expectations() {{
+			oneOf(db).transactionWithResult(with(false),
+					with(any(DbCallable.class)));
+			will(new Action() {
+				@Override
+				public Object invoke(Invocation invocation) throws Throwable {
+					DbCallable<?, ?> callable =
+							(DbCallable<?, ?>) invocation.getParameter(1);
+					callable.call(txn);
+					throw new DbException();
+				}
+
+				@Override
+				public void describeTo(Description description) {
+					description.appendText("runs transaction then fails");
+				}
+			});
+		}});
+
+		try {
+			manager.sendFile(contact.getId(), "file.bin",
+					"application/octet-stream", 1,
+					new ByteArrayInputStream(new byte[] {1}));
+			fail();
+		} catch (DbException expected) {
+			// Expected after transaction body has written transfer files.
 		}
 
 		File storageDir = new File(testDir, "filetransfer");
