@@ -2,6 +2,8 @@ package org.briarproject.briar.android.conversation;
 
 import android.app.Application;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.Contact;
@@ -38,6 +40,10 @@ import org.briarproject.briar.api.autodelete.UnexpectedTimerException;
 import org.briarproject.briar.api.autodelete.event.AutoDeleteTimerMirroredEvent;
 import org.briarproject.briar.api.avatar.event.AvatarUpdatedEvent;
 import org.briarproject.briar.api.conversation.ConversationManager;
+import org.briarproject.briar.api.filetransfer.FileTransferHeader;
+import org.briarproject.briar.api.filetransfer.FileTransferManager;
+import org.briarproject.briar.api.filetransfer.FileTransferProgress;
+import org.briarproject.briar.api.filetransfer.event.FileTransferReceivedEvent;
 import org.briarproject.briar.api.identity.AuthorInfo;
 import org.briarproject.briar.api.identity.AuthorManager;
 import org.briarproject.briar.api.messaging.MessagingManager;
@@ -50,6 +56,8 @@ import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
@@ -101,6 +109,10 @@ public class ConversationViewModel extends DbViewModel
 	private final AttachmentCreator attachmentCreator;
 	private final AutoDeleteManager autoDeleteManager;
 	private final ConversationManager conversationManager;
+	private final FileTransferManager fileTransferManager;
+	private final Handler fileHandler = new Handler(Looper.getMainLooper());
+	private final Map<MessageId, MutableLiveData<FileTransferProgress>> fileProgress =
+			new ConcurrentHashMap<>();
 
 	@Nullable
 	private ContactId contactId = null;
@@ -139,7 +151,8 @@ public class ConversationViewModel extends DbViewModel
 			AttachmentRetriever attachmentRetriever,
 			AttachmentCreator attachmentCreator,
 			AutoDeleteManager autoDeleteManager,
-			ConversationManager conversationManager) {
+			ConversationManager conversationManager,
+			FileTransferManager fileTransferManager) {
 		super(application, dbExecutor, lifecycleManager, db, androidExecutor);
 		this.db = db;
 		this.eventBus = eventBus;
@@ -152,6 +165,7 @@ public class ConversationViewModel extends DbViewModel
 		this.attachmentCreator = attachmentCreator;
 		this.autoDeleteManager = autoDeleteManager;
 		this.conversationManager = conversationManager;
+		this.fileTransferManager = fileTransferManager;
 		messagingGroupId = map(contactItem, c ->
 				messagingManager.getContactGroup(c.getContact()).getId());
 		eventBus.addListener(this);
@@ -183,6 +197,12 @@ public class ConversationViewModel extends DbViewModel
 			if (a.getContactId().equals(contactId)) {
 				LOG.info("Avatar updated");
 				updateAvatar(a);
+			}
+		} else if (e instanceof FileTransferReceivedEvent) {
+			FileTransferReceivedEvent f = (FileTransferReceivedEvent) e;
+			if (f.getContactId().equals(contactId)) {
+				LOG.info("File transfer received");
+				getFileProgress(f.getMessageHeader());
 			}
 		}
 	}
@@ -409,6 +429,55 @@ public class ConversationViewModel extends DbViewModel
 
 	AttachmentRetriever getAttachmentRetriever() {
 		return attachmentRetriever;
+	}
+
+	/**
+	 * Returns a {@link LiveData} with the progress of the given file transfer.
+	 * If this is the first time the transfer is observed, a periodic poll of
+	 * {@link FileTransferManager#getProgress(FileTransferHeader)} is started
+	 * on a background thread until the transfer is complete or errored.
+	 */
+	@UiThread
+	LiveData<FileTransferProgress> getFileProgress(FileTransferHeader h) {
+		MutableLiveData<FileTransferProgress> live = fileProgress.get(h.getId());
+		if (live == null) {
+			live = new MutableLiveData<>(new FileTransferProgress(
+					FileTransferProgress.State.TRANSFERRING, 0,
+					h.getFileSize()));
+			fileProgress.put(h.getId(), live);
+			startFileProgressPolling(h, live);
+		}
+		return live;
+	}
+
+	private void startFileProgressPolling(FileTransferHeader h,
+			MutableLiveData<FileTransferProgress> live) {
+		Runnable poll = new Runnable() {
+			@Override
+			public void run() {
+				runOnDbThread(() -> {
+					FileTransferProgress p;
+					try {
+						p = fileTransferManager.getProgress(h);
+					} catch (DbException e) {
+						FileTransferProgress old = live.getValue();
+						long transferred =
+								old == null ? 0 : old.getTransferred();
+						p = new FileTransferProgress(
+								FileTransferProgress.State.ERROR, transferred,
+								h.getFileSize());
+					}
+					live.postValue(p);
+					if (p.getState() == FileTransferProgress.State.COMPLETE
+							|| p.getState() == FileTransferProgress.State.ERROR) {
+						fileProgress.remove(h.getId());
+					} else {
+						fileHandler.postDelayed(this, 1000);
+					}
+				});
+			}
+		};
+		fileHandler.post(poll);
 	}
 
 	LiveData<ContactItem> getContactItem() {

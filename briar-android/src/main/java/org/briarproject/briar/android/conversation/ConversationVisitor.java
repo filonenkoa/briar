@@ -6,6 +6,7 @@ import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.R;
 import org.briarproject.briar.android.attachment.AttachmentItem;
 import org.briarproject.briar.api.blog.BlogInvitationRequest;
+import org.briarproject.briar.api.filetransfer.FileTransferHeader;
 import org.briarproject.briar.api.blog.BlogInvitationResponse;
 import org.briarproject.briar.api.conversation.ConversationMessageVisitor;
 import org.briarproject.briar.api.forum.ForumInvitationRequest;
@@ -244,6 +245,14 @@ class ConversationVisitor implements
 					R.layout.list_item_conversation_notice_in, text,
 					contactName, r);
 		}
+	}
+
+	@Override
+	public ConversationItem visitFileTransferHeader(FileTransferHeader h) {
+		int layout = h.isLocal() ?
+				R.layout.list_item_conversation_file_out :
+				R.layout.list_item_conversation_file_in;
+		return new ConversationFileItem(layout, h, contactName);
 	}
 
 	@Override

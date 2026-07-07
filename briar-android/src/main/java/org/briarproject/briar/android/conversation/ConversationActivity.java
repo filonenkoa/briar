@@ -57,6 +57,7 @@ import org.briarproject.briar.android.introduction.IntroductionActivity;
 import org.briarproject.briar.android.privategroup.conversation.GroupActivity;
 import org.briarproject.briar.android.removabledrive.RemovableDriveActivity;
 import org.briarproject.briar.android.util.ActivityLaunchers.GetMultipleImagesAdvanced;
+import org.briarproject.briar.android.util.ActivityLaunchers.OpenFileAdvanced;
 import org.briarproject.briar.android.util.ActivityLaunchers.OpenMultipleImageDocumentsAdvanced;
 import org.briarproject.briar.android.util.BriarSnackbarBuilder;
 import org.briarproject.briar.android.view.BriarRecyclerView;
@@ -80,6 +81,9 @@ import org.briarproject.briar.api.conversation.ConversationRequest;
 import org.briarproject.briar.api.conversation.ConversationResponse;
 import org.briarproject.briar.api.conversation.DeletionResult;
 import org.briarproject.briar.api.conversation.event.ConversationMessageReceivedEvent;
+import org.briarproject.briar.api.filetransfer.FileTransferHeader;
+import org.briarproject.briar.api.filetransfer.FileTransferManager;
+import org.briarproject.briar.api.filetransfer.FileTransferProgress;
 import org.briarproject.briar.api.forum.ForumSharingManager;
 import org.briarproject.briar.api.introduction.IntroductionManager;
 import org.briarproject.briar.api.messaging.MessagingManager;
@@ -88,6 +92,15 @@ import org.briarproject.briar.api.privategroup.invitation.GroupInvitationManager
 import org.briarproject.nullsafety.MethodsNotNullByDefault;
 import org.briarproject.nullsafety.ParametersNotNullByDefault;
 
+import android.content.ContentResolver;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.OpenableColumns;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -107,6 +120,7 @@ import androidx.appcompat.widget.Toolbar;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.ActivityOptionsCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
@@ -191,6 +205,8 @@ public class ConversationActivity extends BriarActivity
 	volatile BlogSharingManager blogSharingManager;
 	@Inject
 	volatile GroupInvitationManager groupInvitationManager;
+	@Inject
+	FileTransferManager fileTransferManager;
 
 	private final Map<MessageId, String> textCache = new ConcurrentHashMap<>();
 	private final Observer<String> contactNameObserver = name -> {
@@ -204,6 +220,9 @@ public class ConversationActivity extends BriarActivity
 	private final ActivityResultLauncher<String> contentLauncher =
 			registerForActivityResult(new GetMultipleImagesAdvanced(),
 					this::onImagesChosen);
+	private final ActivityResultLauncher<String[]> fileLauncher =
+			registerForActivityResult(new OpenFileAdvanced(),
+					this::onFileChosen);
 
 	private AttachmentRetriever attachmentRetriever;
 	private ConversationViewModel viewModel;
@@ -625,8 +644,14 @@ public class ConversationActivity extends BriarActivity
 	private List<ConversationItem> createItems(
 			Collection<ConversationMessageHeader> headers) {
 		List<ConversationItem> items = new ArrayList<>(headers.size());
-		for (ConversationMessageHeader h : headers)
-			items.add(h.accept(visitor));
+		for (ConversationMessageHeader h : headers) {
+			ConversationItem item = h.accept(visitor);
+			if (item instanceof ConversationFileItem) {
+				((ConversationFileItem) item).setProgressLiveData(
+						viewModel.getFileProgress((FileTransferHeader) h));
+			}
+			items.add(item);
+		}
 		return items;
 	}
 
@@ -751,7 +776,12 @@ public class ConversationActivity extends BriarActivity
 					name -> addConversationItem(h.accept(visitor)));
 		} else {
 			// visitor also loads message text and attachments (if existing)
-			addConversationItem(h.accept(visitor));
+			ConversationItem item = h.accept(visitor);
+			if (item instanceof ConversationFileItem) {
+				((ConversationFileItem) item).setProgressLiveData(
+						viewModel.getFileProgress((FileTransferHeader) h));
+			}
+			addConversationItem(item);
 		}
 	}
 
@@ -780,12 +810,113 @@ public class ConversationActivity extends BriarActivity
 
 	@Override
 	public void onAttachImageClicked() {
-		launchActivityToOpenFile(this, docLauncher, contentLauncher, "image/*");
+		// Repurpose the attach button to send any type of file as a
+		// chunked file transfer.
+		fileLauncher.launch(new String[] {"*/*"});
 	}
 
 	private void onImagesChosen(@Nullable List<Uri> uris) {
 		// TODO: remove cast when removing feature flag
 		((TextAttachmentController) sendController).onImageReceived(uris);
+	}
+
+	@Override
+	public void onFileClicked(ConversationFileItem item) {
+		FileTransferProgress p = item.getProgress().getValue();
+		if (p == null || p.getState() != FileTransferProgress.State.COMPLETE)
+			return;
+		openFile(item.getHeader());
+	}
+
+	private void openFile(FileTransferHeader h) {
+		runOnDbThread(() -> {
+			try {
+				InputStream in = fileTransferManager.getFile(h);
+				if (in == null) {
+					showFileOpenError(R.string.file_transfer_open_failed);
+					return;
+				}
+				File dir = new File(getCacheDir(), "filetransfer");
+				//noinspection ResultOfMethodCallIgnored
+				dir.mkdirs();
+				File out = new File(dir, sanitizeFileName(h.getFileName()));
+				try (InputStream i = in;
+						FileOutputStream fos = new FileOutputStream(out)) {
+					byte[] buf = new byte[8192];
+					int read;
+					while ((read = i.read(buf)) != -1) fos.write(buf, 0, read);
+				}
+				String mime = h.getContentType();
+				if (isNullOrEmpty(mime)) mime = "application/octet-stream";
+				Uri uri = FileProvider.getUriForFile(this,
+						"org.briarproject.briar.android.fileprovider", out);
+				Intent intent = new Intent(Intent.ACTION_VIEW);
+				intent.setDataAndType(uri, mime);
+				intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+				runOnUiThreadUnlessDestroyed(() -> startActivity(intent));
+			} catch (DbException | IOException e) {
+				logException(LOG, WARNING, e);
+				showFileOpenError(R.string.file_transfer_open_error);
+			}
+		});
+	}
+
+	private void showFileOpenError(int stringRes) {
+		runOnUiThreadUnlessDestroyed(() -> Toast
+				.makeText(this, stringRes, LENGTH_SHORT).show());
+	}
+
+	@Nullable
+	private static String sanitizeFileName(@Nullable String name) {
+		if (isNullOrEmpty(name)) return "file";
+		String n = name.replaceAll("[/\\\\]", "_");
+		return n.isEmpty() ? "file" : n;
+	}
+
+	private void onFileChosen(@Nullable Uri uri) {
+		if (uri == null) return;
+		ContentResolver cr = getContentResolver();
+		String name = "file";
+		long size = 0;
+		String mime = cr.getType(uri);
+		try (Cursor c = cr.query(uri, new String[] {
+				OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE },
+				null, null, null)) {
+			if (c != null && c.moveToFirst()) {
+				String displayName = c.getString(0);
+				if (!isNullOrEmpty(displayName)) name = displayName;
+				long s = c.getLong(1);
+				if (!c.isNull(1)) size = s;
+			}
+		} catch (Exception e) {
+			logException(LOG, WARNING, e);
+		}
+		if (isNullOrEmpty(mime)) mime = "application/octet-stream";
+		final String fileName = name;
+		final String contentType = mime;
+		final long fileSize = size;
+		runOnDbThread(() -> {
+			try {
+				InputStream in = cr.openInputStream(uri);
+				if (in == null) throw new IOException("Could not open stream");
+				FileTransferHeader header = fileTransferManager.sendFile(
+						contactId, fileName, contentType, fileSize, in);
+				in.close();
+				runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
+			} catch (DbException | IOException e) {
+				logException(LOG, WARNING, e);
+			}
+		});
+	}
+
+	@UiThread
+	private void onFileSent(FileTransferHeader header) {
+		ConversationFileItem item = new ConversationFileItem(
+				header.isLocal() ? R.layout.list_item_conversation_file_out :
+						R.layout.list_item_conversation_file_in,
+				header, viewModel.getContactDisplayName());
+		item.setProgressLiveData(viewModel.getFileProgress(header));
+		addConversationItem(item);
 	}
 
 	@Override

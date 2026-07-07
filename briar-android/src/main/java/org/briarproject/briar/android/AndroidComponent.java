@@ -82,6 +82,7 @@ import org.briarproject.briar.api.privategroup.PrivateGroupManager;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationFactory;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationManager;
 import org.briarproject.briar.api.test.TestDataCreator;
+import org.briarproject.briar.api.filetransfer.FileTransferManager;
 import org.briarproject.onionwrapper.CircumventionProvider;
 import org.briarproject.onionwrapper.LocationUtils;
 
@@ -208,6 +209,8 @@ public interface AndroidComponent
 	AndroidWakeLockManager wakeLockManager();
 
 	CachingLogHandler logHandler();
+
+	FileTransferManager fileTransferManager();
 
 	Thread.UncaughtExceptionHandler exceptionHandler();
 

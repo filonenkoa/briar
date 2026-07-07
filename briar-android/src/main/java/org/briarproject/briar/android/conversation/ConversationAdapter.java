@@ -83,6 +83,10 @@ class ConversationAdapter
 			return new ConversationNoticeViewHolder(v, listener, false);
 		} else if (type == R.layout.list_item_conversation_request) {
 			return new ConversationRequestViewHolder(v, listener, true);
+		} else if (type == R.layout.list_item_conversation_file_in) {
+			return new FileTransferViewHolder(v, listener, true);
+		} else if (type == R.layout.list_item_conversation_file_out) {
+			return new FileTransferViewHolder(v, listener, false);
 		}
 		throw new IllegalArgumentException("Unknown ConversationItem");
 	}

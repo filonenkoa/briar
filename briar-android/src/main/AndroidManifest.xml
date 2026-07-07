@@ -527,8 +527,18 @@
 			android:theme="@style/BriarTheme">
 			<meta-data
 				android:name="android.support.PARENT_ACTIVITY"
-				android:value="org.briarproject.briar.android.settings.SettingsActivity" />
-		</activity>
+			android:value="org.briarproject.briar.android.settings.SettingsActivity" />
+	</activity>
+
+	<provider
+		android:name="androidx.core.content.FileProvider"
+		android:authorities="org.briarproject.briar.android.fileprovider"
+		android:exported="false"
+		android:grantUriPermissions="true">
+		<meta-data
+			android:name="android.support.FILE_PROVIDER_PATHS"
+			android:resource="@xml/file_paths" />
+	</provider>
 
 	</application>
 

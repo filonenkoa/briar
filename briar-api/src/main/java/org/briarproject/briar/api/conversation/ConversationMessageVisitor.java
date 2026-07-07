@@ -6,6 +6,7 @@ import org.briarproject.briar.api.forum.ForumInvitationRequest;
 import org.briarproject.briar.api.forum.ForumInvitationResponse;
 import org.briarproject.briar.api.introduction.IntroductionRequest;
 import org.briarproject.briar.api.introduction.IntroductionResponse;
+import org.briarproject.briar.api.filetransfer.FileTransferHeader;
 import org.briarproject.briar.api.messaging.PrivateMessageHeader;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationRequest;
 import org.briarproject.briar.api.privategroup.invitation.GroupInvitationResponse;
@@ -31,4 +32,6 @@ public interface ConversationMessageVisitor<T> {
 	T visitIntroductionRequest(IntroductionRequest r);
 
 	T visitIntroductionResponse(IntroductionResponse r);
+
+	T visitFileTransferHeader(FileTransferHeader h);
 }

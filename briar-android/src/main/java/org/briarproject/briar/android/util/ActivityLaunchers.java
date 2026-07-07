@@ -111,6 +111,21 @@ public class ActivityLaunchers {
 		}
 	}
 
+	/**
+	 * Opens a document picker for any file type and returns a single Uri.
+	 */
+	public static class OpenFileAdvanced extends OpenDocument {
+		@NonNull
+		@Override
+		public Intent createIntent(Context context, String[] input) {
+			Intent i = super.createIntent(context, input);
+			putShowAdvancedExtra(i);
+			i.setType("*/*");
+			i.addFlags(FLAG_GRANT_READ_URI_PERMISSION);
+			return i;
+		}
+	}
+
 	public static class RequestBluetoothDiscoverable
 			extends ActivityResultContract<Integer, Boolean> {
 		@NonNull

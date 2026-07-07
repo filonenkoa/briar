@@ -18,6 +18,8 @@ interface ConversationListener {
 	void onAttachmentClicked(View view, ConversationMessageItem messageItem,
 			AttachmentItem attachmentItem);
 
+	void onFileClicked(ConversationFileItem item);
+
 	void onAutoDeleteTimerNoticeClicked();
 
 	void onLinkClick(String url);

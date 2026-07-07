@@ -16,6 +16,7 @@ import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.format.DateUtils;
+import android.text.format.Formatter;
 import android.text.method.LinkMovementMethod;
 import android.text.style.ClickableSpan;
 import android.text.style.ForegroundColorSpan;
@@ -212,6 +213,14 @@ public class UiUtils {
 	public static String formatDateFull(Context ctx, long time) {
 		return DateUtils.formatDateTime(ctx, time,
 				FORMAT_SHOW_DATE | FORMAT_SHOW_YEAR | FORMAT_ABBREV_ALL);
+	}
+
+	/**
+	 * Formats a byte count as a human-readable file size, e.g. "3.1 MB".
+	 */
+	public static String formatFileSize(Context ctx, long bytes) {
+		if (bytes < 0) bytes = 0;
+		return Formatter.formatFileSize(ctx, bytes);
 	}
 
 	/**

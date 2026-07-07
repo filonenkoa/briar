@@ -7,6 +7,7 @@ import org.briarproject.briar.blog.BlogModule;
 import org.briarproject.briar.client.BriarClientModule;
 import org.briarproject.briar.conversation.ConversationModule;
 import org.briarproject.briar.feed.FeedModule;
+import org.briarproject.briar.filetransfer.FileTransferModule;
 import org.briarproject.briar.forum.ForumModule;
 import org.briarproject.briar.identity.IdentityModule;
 import org.briarproject.briar.introduction.IntroductionModule;
@@ -27,6 +28,7 @@ import dagger.Module;
 		ConversationModule.class,
 		FeedModule.class,
 		ForumModule.class,
+		FileTransferModule.class,
 		GroupInvitationModule.class,
 		IdentityModule.class,
 		IntroductionModule.class,
