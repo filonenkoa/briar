@@ -58,7 +58,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
@@ -113,8 +112,9 @@ public class ConversationViewModel extends DbViewModel
 	private final FileTransferManager fileTransferManager;
 	private final Handler fileHandler = new Handler(Looper.getMainLooper());
 	private final Map<MessageId, MutableLiveData<FileTransferProgress>> fileProgress =
-			new ConcurrentHashMap<>();
+			new HashMap<>();
 	private final Map<MessageId, Runnable> fileProgressPollers = new HashMap<>();
+	private volatile boolean cleared = false;
 
 	@Nullable
 	private ContactId contactId = null;
@@ -176,8 +176,18 @@ public class ConversationViewModel extends DbViewModel
 	@Override
 	protected void onCleared() {
 		super.onCleared();
+		cleared = true;
 		attachmentCreator.cancel();  // also deletes unsent attachments
 		eventBus.removeListener(this);
+		if (Looper.myLooper() == Looper.getMainLooper()) {
+			clearFileProgressPolling();
+		} else {
+			androidExecutor.runOnUiThread(this::clearFileProgressPolling);
+		}
+	}
+
+	@UiThread
+	private void clearFileProgressPolling() {
 		for (Runnable r : fileProgressPollers.values()) {
 			fileHandler.removeCallbacks(r);
 		}
@@ -207,10 +217,13 @@ public class ConversationViewModel extends DbViewModel
 			}
 		} else if (e instanceof FileTransferReceivedEvent) {
 			FileTransferReceivedEvent f = (FileTransferReceivedEvent) e;
-			if (f.getContactId().equals(contactId)) {
-				LOG.info("File transfer received");
-				getFileProgress(f.getMessageHeader());
-			}
+			androidExecutor.runOnUiThread(() -> {
+				if (cleared) return;
+				if (f.getContactId().equals(contactId)) {
+					LOG.info("File transfer received");
+					getFileProgress(f.getMessageHeader());
+				}
+			});
 		}
 	}
 
@@ -451,18 +464,22 @@ public class ConversationViewModel extends DbViewModel
 			live = new MutableLiveData<>(new FileTransferProgress(
 					FileTransferProgress.State.TRANSFERRING, 0,
 					h.getFileSize()));
+			if (cleared) return live;
 			fileProgress.put(h.getId(), live);
 			startFileProgressPolling(h, live);
 		}
 		return live;
 	}
 
+	@UiThread
 	private void startFileProgressPolling(FileTransferHeader h,
 			MutableLiveData<FileTransferProgress> live) {
+		if (cleared) return;
 		MessageId id = h.getId();
 		Runnable poll = new Runnable() {
 			@Override
 			public void run() {
+				if (cleared || fileProgressPollers.get(id) != this) return;
 				runOnDbThread(() -> {
 					FileTransferProgress p;
 					try {
@@ -477,7 +494,7 @@ public class ConversationViewModel extends DbViewModel
 					}
 					FileTransferProgress progress = p;
 					fileHandler.post(() -> {
-						if (fileProgressPollers.get(id) != this) return;
+						if (cleared || fileProgressPollers.get(id) != this) return;
 						live.setValue(progress);
 						if (progress.getState() == FileTransferProgress.State.COMPLETE
 								|| progress.getState() == FileTransferProgress.State.ERROR) {
