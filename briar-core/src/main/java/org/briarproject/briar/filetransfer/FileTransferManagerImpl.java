@@ -403,24 +403,32 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		int chunkTotal = metaDict.getInt(MSG_KEY_CHUNK_TOTAL);
 		boolean read = metaDict.getBoolean(MSG_KEY_READ);
 		int received = metaDict.getInt(MSG_KEY_CHUNKS_RECEIVED);
+		String transferState = getLatestControlTransferState(txn, groupId,
+				fileId);
+		boolean terminal = transferState != null;
 		File fileDir = getFileDir(fileId);
-		int actualReceived = countExistingChunks(fileId, fileDir, chunkTotal);
-		if (actualReceived > received) {
-			if (actualReceived >= chunkTotal) {
-				if (tryAssemble(txn, groupId, fileId, m.getId())) {
-					setChunksReceived(txn, m.getId(), chunkTotal);
-					received = chunkTotal;
+		if (terminal) {
+			setTransferState(txn, m.getId(), transferState);
+			scheduleDeleteFileDir(txn, fileId);
+		} else {
+			int actualReceived = countExistingChunks(fileId, fileDir, chunkTotal);
+			if (actualReceived > received) {
+				if (actualReceived >= chunkTotal) {
+					if (tryAssemble(txn, groupId, fileId, m.getId())) {
+						setChunksReceived(txn, m.getId(), chunkTotal);
+						received = chunkTotal;
+					}
+				} else {
+					setChunksReceived(txn, m.getId(), actualReceived);
+					received = actualReceived;
 				}
-			} else {
-				setChunksReceived(txn, m.getId(), actualReceived);
-				received = actualReceived;
 			}
-		}
-		File assembled = getAssembledFile(fileDir, safeFileName(fileName));
-		if (assembled.exists() && assembled.length() == fileSize &&
-				received < chunkTotal) {
-			setChunksReceived(txn, m.getId(), chunkTotal);
-			received = chunkTotal;
+			File assembled = getAssembledFile(fileDir, safeFileName(fileName));
+			if (assembled.exists() && assembled.length() == fileSize &&
+					received < chunkTotal) {
+				setChunksReceived(txn, m.getId(), chunkTotal);
+				received = chunkTotal;
+			}
 		}
 		FileTransferHeader header = new FileTransferHeader(m.getId(), groupId,
 				timestamp, local, read, false, false, NO_AUTO_DELETE_TIMER,
@@ -428,13 +436,33 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		ContactId contactId = getContactId(txn, groupId);
 		txn.attach(new FileTransferReceivedEvent(header, contactId));
 		conversationManager.trackIncomingMessage(txn, m);
-		if (received >= chunkTotal &&
+		if (!terminal && received >= chunkTotal &&
 				!tryAssemble(txn, groupId, fileId, m.getId())) {
-			actualReceived = countExistingChunks(fileId, fileDir, chunkTotal);
+			int actualReceived = countExistingChunks(fileId, fileDir, chunkTotal);
 			if (actualReceived != received) {
 				setChunksReceived(txn, m.getId(), actualReceived);
 			}
 		}
+	}
+
+	@Nullable
+	private String getLatestControlTransferState(Transaction txn, GroupId groupId,
+			UniqueId fileId) throws DbException, FormatException {
+		BdfDictionary query = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
+				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_CONTROL));
+		Map<MessageId, BdfDictionary> controls =
+				clientHelper.getMessageMetadataAsDictionary(txn, groupId, query);
+		String latestState = null;
+		long latestTimestamp = Long.MIN_VALUE;
+		for (BdfDictionary control : controls.values()) {
+			long timestamp = control.getLong(MSG_KEY_TIMESTAMP);
+			if (latestState == null || timestamp > latestTimestamp) {
+				latestState = control.getString(MSG_KEY_TRANSFER_STATE);
+				latestTimestamp = timestamp;
+			}
+		}
+		return latestState;
 	}
 
 	private void incomingControl(Transaction txn, Message m,
@@ -901,11 +929,17 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		int peerMinor = clientVersioningManager.getClientMinorVersion(txn,
 				contactId, CLIENT_ID, MAJOR_VERSION);
 		if (peerMinor < MINOR_VERSION) return;
+		long timestamp = clockMillis();
 		BdfList body = BdfList.of(MSG_TYPE_CONTROL, h.getFileId().getBytes(),
 				transferState);
-		Message m = clientHelper.createMessage(h.getGroupId(), clockMillis(),
-				body);
-		clientHelper.addLocalMessage(txn, m, new BdfDictionary(), true, false);
+		Message m = clientHelper.createMessage(h.getGroupId(), timestamp, body);
+		BdfDictionary meta = new BdfDictionary();
+		meta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CONTROL);
+		meta.put(MSG_KEY_FILE_ID, h.getFileId().getBytes());
+		meta.put(MSG_KEY_TRANSFER_STATE, transferState);
+		meta.put(MSG_KEY_LOCAL, true);
+		meta.put(MSG_KEY_TIMESTAMP, timestamp);
+		clientHelper.addLocalMessage(txn, m, meta, true, false);
 	}
 
 	@Override

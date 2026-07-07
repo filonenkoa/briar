@@ -891,6 +891,62 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testIncomingHeaderAppliesEarlierControlAndIgnoresChunks()
+			throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId controlId = new MessageId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		Message control = new Message(controlId, group.getId(), 1,
+				new byte[] {1});
+		Message headerMessage = new Message(headerId, group.getId(), 2,
+				new byte[] {2});
+		File fileDir = getFileDir(fileId);
+		writeChunk(fileDir, 0, 1, new byte[] {1, 2});
+		BdfDictionary controlMeta = new BdfDictionary();
+		controlMeta.put(MSG_KEY_MSG_TYPE, MSG_TYPE_CONTROL);
+		controlMeta.put(MSG_KEY_FILE_ID, fileId.getBytes());
+		controlMeta.put(MSG_KEY_TRANSFER_STATE,
+				TRANSFER_STATE_CANCELLED_BY_SENDER);
+		controlMeta.put(MSG_KEY_LOCAL, false);
+		controlMeta.put(MSG_KEY_TIMESTAMP, 1L);
+		BdfDictionary headerMeta = headerMetadata(fileId, "file.bin", 2L, 1, 0);
+		Map<MessageId, BdfDictionary> noHeaders = new HashMap<>();
+		Map<MessageId, BdfDictionary> controls = new HashMap<>();
+		controls.put(controlId, controlMeta);
+		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		Sequence sequence = context.sequence("control-before-header");
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(noHeaders));
+			inSequence(sequence);
+			oneOf(clientHelper).getMessageMetadataAsDictionary(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(controls));
+			inSequence(sequence);
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
+			will(returnValue(groupMeta));
+			oneOf(conversationManager).trackIncomingMessage(txn, headerMessage);
+			never(clientHelper).getMessageMetadataAsDictionary(txn, headerId);
+		}});
+
+		incomingControl(txn, control, controlMeta);
+		incomingHeader(txn, headerMessage, headerMeta);
+
+		assertTrue(fileDir.exists());
+		runCommitTasksIgnoringEvents(txn);
+		assertFalse(fileDir.exists());
+	}
+
+	@Test
 	public void testIncomingChunkForTerminalHeaderIsIgnored()
 			throws Exception {
 		Transaction txn = new Transaction(null, false);
@@ -1151,6 +1207,24 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		method.invoke(manager, txn, m, meta);
 	}
 
+	private void incomingHeader(Transaction txn, Message m, BdfDictionary meta)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"incomingHeader", Transaction.class, Message.class,
+				BdfDictionary.class);
+		method.setAccessible(true);
+		method.invoke(manager, txn, m, meta);
+	}
+
+	private void incomingControl(Transaction txn, Message m, BdfDictionary meta)
+			throws Exception {
+		Method method = FileTransferManagerImpl.class.getDeclaredMethod(
+				"incomingControl", Transaction.class, Message.class,
+				BdfDictionary.class);
+		method.setAccessible(true);
+		method.invoke(manager, txn, m, meta);
+	}
+
 	private FileTransferHeader sendFile(Transaction txn, ContactId c,
 			String fileName, String contentType, long fileSize, InputStream in)
 			throws Exception {
@@ -1257,6 +1331,22 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 				@Override
 				public void visit(EventAction a) {
 					throw new AssertionError();
+				}
+
+				@Override
+				public void visit(TaskAction a) {
+					a.getTask().run();
+				}
+			});
+		}
+	}
+
+	private void runCommitTasksIgnoringEvents(Transaction txn) {
+		for (CommitAction action : txn.getActions()) {
+			action.accept(new CommitAction.Visitor() {
+				@Override
+				public void visit(EventAction a) {
+					// Ignore events; this helper only runs cleanup tasks.
 				}
 
 				@Override

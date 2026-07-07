@@ -521,8 +521,11 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 			oneOf(clientHelper).createMessage(with(equal(group.getId())),
 					with(any(Long.class)), with(equal(body)));
 			will(returnValue(control));
-			oneOf(clientHelper).addLocalMessage(txn, control,
-					new BdfDictionary(), true, false);
+			oneOf(clientHelper).addLocalMessage(with(same(txn)),
+					with(same(control)), with(any(BdfDictionary.class)), with(true),
+					with(false));
+			will(assertControlMetadata(fileId,
+					TRANSFER_STATE_CANCELLED_BY_SENDER));
 		}});
 
 		manager.cancelFileTransfer(header);
@@ -560,8 +563,11 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 			oneOf(clientHelper).createMessage(with(equal(group.getId())),
 					with(any(Long.class)), with(equal(body)));
 			will(returnValue(control));
-			oneOf(clientHelper).addLocalMessage(txn, control,
-					new BdfDictionary(), true, false);
+			oneOf(clientHelper).addLocalMessage(with(same(txn)),
+					with(same(control)), with(any(BdfDictionary.class)), with(true),
+					with(false));
+			will(assertControlMetadata(fileId,
+					TRANSFER_STATE_REJECTED_BY_RECEIVER));
 		}});
 
 		manager.rejectFileTransfer(header);
@@ -718,6 +724,27 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 			@Override
 			public void describeTo(Description description) {
 				description.appendText("runs transaction");
+			}
+		};
+	}
+
+	private Action assertControlMetadata(UniqueId fileId, String transferState) {
+		return new Action() {
+			@Override
+			public Object invoke(Invocation invocation) throws Throwable {
+				BdfDictionary meta = (BdfDictionary) invocation.getParameter(2);
+				assertEquals(MSG_TYPE_CONTROL, meta.getString(MSG_KEY_MSG_TYPE));
+				assertEquals(fileId, new UniqueId(meta.getRaw(MSG_KEY_FILE_ID)));
+				assertEquals(transferState,
+						meta.getString(MSG_KEY_TRANSFER_STATE));
+				assertTrue(meta.getBoolean(MSG_KEY_LOCAL));
+				meta.getLong(MSG_KEY_TIMESTAMP);
+				return null;
+			}
+
+			@Override
+			public void describeTo(Description description) {
+				description.appendText("asserts control metadata");
 			}
 		};
 	}
