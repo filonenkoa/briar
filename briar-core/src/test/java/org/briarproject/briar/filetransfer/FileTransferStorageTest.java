@@ -49,6 +49,7 @@ import static org.briarproject.bramble.test.TestUtils.getTestDirectory;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
 import static org.briarproject.bramble.test.TestUtils.readBytes;
 import static org.briarproject.bramble.test.TestUtils.writeBytes;
+import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUNK_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CLIENT_ID;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAJOR_VERSION;
@@ -564,6 +565,22 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 		try (InputStream i = in) {
 			assertEquals(-1, i.read());
 		}
+	}
+
+	@Test
+	public void testSetReadFlagMergesMessageMetadata() throws Exception {
+		Transaction txn = new Transaction(null, false);
+		GroupId groupId = new GroupId(getRandomId());
+		MessageId messageId = new MessageId(getRandomId());
+		BdfDictionary readMeta = BdfDictionary.of(new BdfEntry(MSG_KEY_READ,
+				true));
+
+		context.checking(new Expectations() {{
+			oneOf(messageTracker).setReadFlag(txn, groupId, messageId, true);
+			oneOf(clientHelper).mergeMessageMetadata(txn, messageId, readMeta);
+		}});
+
+		manager.setReadFlag(txn, groupId, messageId, true);
 	}
 
 	private void expectSendSetup(Transaction txn, Contact contact, Group group)

@@ -38,6 +38,7 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_TIMESTAMP;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
+import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 
 @Immutable
 @NotNullByDefault
@@ -97,6 +98,7 @@ class FileTransferValidator extends BdfMessageValidator {
 		meta.put(MSG_KEY_CHUNK_TOTAL, chunkTotal);
 		meta.put(MSG_KEY_CHUNKS_RECEIVED, 0);
 		meta.put(MSG_KEY_LOCAL, false);
+		meta.put(MSG_KEY_READ, false);
 		meta.put(MSG_KEY_TIMESTAMP, m.getTimestamp());
 		return meta;
 	}

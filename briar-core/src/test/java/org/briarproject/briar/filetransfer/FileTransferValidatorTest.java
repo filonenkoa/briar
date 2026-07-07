@@ -15,9 +15,11 @@ import static org.briarproject.briar.api.filetransfer.FileTransferConstants.CHUN
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_CHUNK_TOTAL;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MAX_FILE_SIZE;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_KEY_CHUNK_TOTAL;
+import static org.briarproject.briar.client.MessageTrackerConstants.MSG_KEY_READ;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_CHUNK;
 import static org.briarproject.briar.api.filetransfer.FileTransferConstants.MSG_TYPE_HEADER;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 
 public class FileTransferValidatorTest extends ValidatorTestCase {
@@ -49,6 +51,16 @@ public class FileTransferValidatorTest extends ValidatorTestCase {
 				"application/octet-stream", 0L, 0);
 
 		assertValid(body);
+	}
+
+	@Test
+	public void testHeaderMetadataIsUnread() throws Exception {
+		BdfList body = BdfList.of(MSG_TYPE_HEADER, randomFileId(), "file.bin",
+				"application/octet-stream", 0L, 0);
+
+		BdfDictionary meta = assertValid(body);
+
+		assertFalse(meta.getBoolean(MSG_KEY_READ));
 	}
 
 	@Test
@@ -102,6 +114,7 @@ public class FileTransferValidatorTest extends ValidatorTestCase {
 
 		BdfDictionary meta = assertValid(body);
 		assertEquals(3, meta.getInt(MSG_KEY_CHUNK_TOTAL).intValue());
+		assertFalse(meta.containsKey(MSG_KEY_READ));
 	}
 
 	private BdfDictionary assertValid(BdfList body) throws Exception {
