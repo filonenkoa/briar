@@ -207,6 +207,18 @@ class ConversationAdapter
 		return null;
 	}
 
+	@Nullable
+	Pair<Integer, ConversationFileItem> getFileItem(MessageId messageId) {
+		for (int i = 0; i < items.size(); i++) {
+			ConversationItem item = items.get(i);
+			if (item instanceof ConversationFileItem &&
+					item.getId().equals(messageId)) {
+				return new Pair<>(i, (ConversationFileItem) item);
+			}
+		}
+		return null;
+	}
+
 	boolean isScrolledToBottom(LinearLayoutManager layoutManager) {
 		return layoutManager.findLastVisibleItemPosition() == items.size() - 1;
 	}

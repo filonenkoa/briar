@@ -238,6 +238,10 @@ public class ConversationActivity extends BriarActivity
 	Executor ioExecutor;
 
 	private final Map<MessageId, String> textCache = new ConcurrentHashMap<>();
+	private final Map<MessageId, LiveData<FileTransferProgress>> fileProgressLiveData =
+			new HashMap<>();
+	private final Map<MessageId, Observer<FileTransferProgress>> fileProgressObservers =
+			new HashMap<>();
 	private final Observer<String> contactNameObserver = name -> {
 		requireNonNull(name);
 		loadMessages();
@@ -713,6 +717,7 @@ public class ConversationActivity extends BriarActivity
 							this::showImageOnboarding);
 				}
 				List<ConversationItem> items = createItems(headers);
+				removeStaleFileProgressObservers(getFileItemIds(items));
 				adapter.replaceAll(items);
 				list.showData();
 				if (layoutManagerState == null) {
@@ -739,12 +744,50 @@ public class ConversationActivity extends BriarActivity
 		for (ConversationMessageHeader h : headers) {
 			ConversationItem item = h.accept(visitor);
 			if (item instanceof ConversationFileItem) {
-				((ConversationFileItem) item).setProgressLiveData(
-						viewModel.getFileProgress((FileTransferHeader) h));
+				attachFileProgress((ConversationFileItem) item,
+						(FileTransferHeader) h);
 			}
 			items.add(item);
 		}
 		return items;
+	}
+
+	@UiThread
+	private void attachFileProgress(ConversationFileItem item,
+			FileTransferHeader h) {
+		LiveData<FileTransferProgress> liveData = viewModel.getFileProgress(h);
+		item.setProgressLiveData(liveData);
+		MessageId id = h.getId();
+		if (fileProgressObservers.containsKey(id)) return;
+		Observer<FileTransferProgress> observer = progress -> {
+			Pair<Integer, ConversationFileItem> pair = adapter.getFileItem(id);
+			if (pair != null) adapter.notifyItemChanged(pair.getFirst());
+		};
+		fileProgressLiveData.put(id, liveData);
+		fileProgressObservers.put(id, observer);
+		liveData.observe(this, observer);
+	}
+
+	private Set<MessageId> getFileItemIds(Collection<ConversationItem> items) {
+		Set<MessageId> ids = new HashSet<>();
+		for (ConversationItem item : items) {
+			if (item instanceof ConversationFileItem) ids.add(item.getId());
+		}
+		return ids;
+	}
+
+	@UiThread
+	private void removeStaleFileProgressObservers(Set<MessageId> activeIds) {
+		for (MessageId id : new HashSet<>(fileProgressObservers.keySet())) {
+			if (!activeIds.contains(id)) removeFileProgressObserver(id);
+		}
+	}
+
+	@UiThread
+	private void removeFileProgressObserver(MessageId id) {
+		LiveData<FileTransferProgress> liveData = fileProgressLiveData.remove(id);
+		Observer<FileTransferProgress> observer = fileProgressObservers.remove(id);
+		if (liveData != null && observer != null) liveData.removeObserver(observer);
 	}
 
 	private void loadMessageText(MessageId m) {
@@ -939,8 +982,8 @@ public class ConversationActivity extends BriarActivity
 			// visitor also loads message text and attachments (if existing)
 			ConversationItem item = h.accept(visitor);
 			if (item instanceof ConversationFileItem) {
-				((ConversationFileItem) item).setProgressLiveData(
-						viewModel.getFileProgress((FileTransferHeader) h));
+				attachFileProgress((ConversationFileItem) item,
+						(FileTransferHeader) h);
 			}
 			addConversationItem(item);
 		}
@@ -951,6 +994,7 @@ public class ConversationActivity extends BriarActivity
 			Collection<MessageId> messageIds) {
 		adapter.incrementRevision();
 		adapter.removeItems(messageIds);
+		for (MessageId id : messageIds) removeFileProgressObserver(id);
 	}
 
 	@UiThread
