@@ -6,6 +6,7 @@ import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.briar.R;
 import org.briarproject.nullsafety.NotNullByDefault;
 
@@ -36,6 +37,8 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 	protected final TextView time;
 	protected final ImageView bomb;
 	@Nullable
+	protected final ImageView messageTransport;
+	@Nullable
 	private String itemKey = null;
 
 	ConversationItemViewHolder(View v, ConversationListener listener,
@@ -49,6 +52,7 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 		text = v.findViewById(R.id.text);
 		time = v.findViewById(R.id.time);
 		bomb = v.findViewById(R.id.bomb);
+		messageTransport = v.findViewById(R.id.messageTransport);
 	}
 
 	@CallSuper
@@ -69,6 +73,7 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 
 		boolean showBomb = item.getAutoDeleteTimer() != NO_AUTO_DELETE_TIMER;
 		bomb.setVisibility(showBomb ? VISIBLE : GONE);
+		bindMessageTransport(item);
 
 		if (outViewHolder != null) outViewHolder.bind(item);
 	}
@@ -110,6 +115,22 @@ abstract class ConversationItemViewHolder extends ViewHolder {
 					v -> listener.onAutoDeleteTimerNoticeClicked());
 		} else {
 			topNotice.setVisibility(GONE);
+		}
+	}
+
+	private void bindMessageTransport(ConversationItem item) {
+		if (messageTransport == null) return;
+		TransportId t = item.getTransportId();
+		if (MessageTransportUi.isKnown(t)) {
+			messageTransport.setVisibility(VISIBLE);
+			messageTransport.setImageResource(MessageTransportUi.getIcon(t));
+			messageTransport.setContentDescription(
+					itemView.getContext().getString(
+							MessageTransportUi.getContentDescription(t,
+									item.isIncoming())));
+		} else {
+			messageTransport.setVisibility(GONE);
+			messageTransport.setContentDescription(null);
 		}
 	}
 

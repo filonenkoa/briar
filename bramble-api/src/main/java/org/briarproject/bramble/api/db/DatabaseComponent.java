@@ -645,8 +645,11 @@ public interface DatabaseComponent extends TransactionManager {
 
 	/**
 	 * Processes a message from the given contact.
+	 *
+	 * @return True if the message body was stored, false if it was ignored
+	 * because the group was invisible or the message already existed
 	 */
-	void receiveMessage(Transaction txn, ContactId c, Message m)
+	boolean receiveMessage(Transaction txn, ContactId c, Message m)
 			throws DbException;
 
 	/**

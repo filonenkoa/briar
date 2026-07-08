@@ -36,16 +36,19 @@ import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.db.NoSuchContactException;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
+import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.plugin.BluetoothConstants;
 import org.briarproject.bramble.api.plugin.LanTcpConstants;
 import org.briarproject.bramble.api.plugin.TorConstants;
+import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.bramble.api.plugin.event.ContactConnectedEvent;
 import org.briarproject.bramble.api.plugin.event.ContactDisconnectedEvent;
 import org.briarproject.bramble.api.plugin.event.ConnectionClosedEvent;
 import org.briarproject.bramble.api.plugin.event.ConnectionOpenedEvent;
 import org.briarproject.bramble.api.sync.ClientId;
 import org.briarproject.bramble.api.sync.MessageId;
+import org.briarproject.bramble.api.sync.event.MessageTransportUpdatedEvent;
 import org.briarproject.bramble.api.sync.event.MessagesAckedEvent;
 import org.briarproject.bramble.api.sync.event.MessagesSentEvent;
 import org.briarproject.bramble.api.versioning.event.ClientVersionUpdatedEvent;
@@ -114,11 +117,13 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.logging.Logger;
 
 import javax.inject.Inject;
@@ -153,6 +158,7 @@ import static android.widget.Toast.LENGTH_SHORT;
 import static androidx.core.app.ActivityOptionsCompat.makeSceneTransitionAnimation;
 import static androidx.lifecycle.Lifecycle.State.STARTED;
 import static androidx.recyclerview.widget.SortedList.INVALID_POSITION;
+import static java.util.Collections.singletonList;
 import static java.util.Collections.sort;
 import static java.util.Objects.requireNonNull;
 import static java.util.logging.Level.INFO;
@@ -227,6 +233,9 @@ public class ConversationActivity extends BriarActivity
 	volatile GroupInvitationManager groupInvitationManager;
 	@Inject
 	FileTransferManager fileTransferManager;
+	@Inject
+	@IoExecutor
+	Executor ioExecutor;
 
 	private final Map<MessageId, String> textCache = new ConcurrentHashMap<>();
 	private final Observer<String> contactNameObserver = name -> {
@@ -782,6 +791,41 @@ public class ConversationActivity extends BriarActivity
 		}
 	}
 
+	private void loadMessageTransports(Collection<MessageId> messageIds) {
+		Set<MessageId> ids = new HashSet<>(messageIds);
+		runOnDbThread(() -> {
+			try {
+				Map<MessageId, TransportId> transports = new HashMap<>();
+				for (ConversationMessageHeader h :
+						conversationManager.getMessageHeaders(contactId)) {
+					if (ids.contains(h.getId()) && h instanceof PrivateMessageHeader) {
+						TransportId t =
+								((PrivateMessageHeader) h).getTransportId();
+						if (t != null) transports.put(h.getId(), t);
+					}
+				}
+				if (!transports.isEmpty()) {
+					runOnUiThreadUnlessDestroyed(
+							() -> updateMessageTransports(transports));
+				}
+			} catch (DbException e) {
+				logException(LOG, WARNING, e);
+			}
+		});
+	}
+
+	@UiThread
+	private void updateMessageTransports(Map<MessageId, TransportId> transports) {
+		for (Map.Entry<MessageId, TransportId> e : transports.entrySet()) {
+			Pair<Integer, ConversationMessageItem> pair =
+					adapter.getMessageItem(e.getKey());
+			if (pair != null) {
+				pair.getSecond().setTransportId(e.getValue());
+				adapter.notifyItemChanged(pair.getFirst());
+			}
+		}
+	}
+
 	@Override
 	public void eventOccurred(Event e) {
 		if (e instanceof ContactRemovedEvent) {
@@ -793,23 +837,35 @@ public class ConversationActivity extends BriarActivity
 		} else if (e instanceof ConversationMessageReceivedEvent) {
 			ConversationMessageReceivedEvent<?> p =
 					(ConversationMessageReceivedEvent<?>) e;
-			runOnUiThreadUnlessDestroyed(() -> {
-				if (p.getContactId().equals(contactId)) {
-					LOG.info("Message received, adding");
-					onNewConversationMessage(p.getMessageHeader());
-				}
-			});
+				runOnUiThreadUnlessDestroyed(() -> {
+					if (p.getContactId().equals(contactId)) {
+						LOG.info("Message received, adding");
+						onNewConversationMessage(p.getMessageHeader());
+						loadMessageTransports(singletonList(
+								p.getMessageHeader().getId()));
+					}
+				});
 		} else if (e instanceof MessagesSentEvent) {
 			MessagesSentEvent m = (MessagesSentEvent) e;
 			if (m.getContactId().equals(contactId)) {
 				LOG.info("Messages sent");
 				markMessages(m.getMessageIds(), true, false);
+				loadMessageTransports(m.getMessageIds());
+			}
+		} else if (e instanceof MessageTransportUpdatedEvent) {
+			MessageTransportUpdatedEvent m = (MessageTransportUpdatedEvent) e;
+			if (m.getContactId().equals(contactId)) {
+				LOG.info("Message transport metadata updated");
+				loadMessageTransports(m.getMessageIds());
 			}
 		} else if (e instanceof MessagesAckedEvent) {
 			MessagesAckedEvent m = (MessagesAckedEvent) e;
 			if (m.getContactId().equals(contactId)) {
 				LOG.info("Messages acked");
-				markMessages(m.getMessageIds(), true, true);
+				runOnUiThreadUnlessDestroyed(() -> {
+					markMessages(m.getMessageIds(), true, true);
+					viewModel.refreshFileProgress();
+				});
 			}
 		} else if (e instanceof ConversationMessagesDeletedEvent) {
 			ConversationMessagesDeletedEvent m =
@@ -964,7 +1020,8 @@ public class ConversationActivity extends BriarActivity
 					return;
 				}
 				runOnUiThreadUnlessDestroyed(() -> {
-					if (!itemKey.equals(imageView.getTag())) return;
+					if (!itemKey.equals(imageView.getTag(
+							R.id.file_transfer_preview_key))) return;
 					GlideApp.with(imageView).load(out).into(imageView);
 				});
 			} catch (DbException | IOException e) {
@@ -1096,25 +1153,33 @@ public class ConversationActivity extends BriarActivity
 		if (isNullOrEmpty(mime)) mime = "application/octet-stream";
 		final String fileName = name;
 		final String contentType = mime;
-		runOnDbThread(() -> {
+		ioExecutor.execute(() -> {
 			File tempFile = null;
 			try {
 				tempFile = copyUriToTempFile(uri, fileName);
-				FileTransferHeader header;
-				try (InputStream in = new FileInputStream(tempFile)) {
-					header = fileTransferManager.sendFile(contactId, fileName,
-							contentType, tempFile.length(), in);
-				}
-				runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
-			} catch (DbException | IOException e) {
+				File file = tempFile;
+				runOnDbThread(() -> sendTempFile(file, fileName, contentType));
+			} catch (IOException e) {
 				logException(LOG, WARNING, e);
 				showFileSendError();
-			} finally {
-				if (tempFile != null && !tempFile.delete()) {
-					LOG.info("Could not delete send temp file");
-				}
 			}
 		});
+	}
+
+	private void sendTempFile(File tempFile, String fileName, String contentType) {
+		try {
+			FileTransferHeader header;
+			try (InputStream in = new FileInputStream(tempFile)) {
+				header = fileTransferManager.sendFile(contactId, fileName,
+						contentType, tempFile.length(), in);
+			}
+			runOnUiThreadUnlessDestroyed(() -> onFileSent(header));
+		} catch (DbException | IOException e) {
+			logException(LOG, WARNING, e);
+			showFileSendError();
+		} finally {
+			if (!tempFile.delete()) LOG.info("Could not delete send temp file");
+		}
 	}
 
 	private void showFileSendError() {

@@ -1,6 +1,7 @@
 package org.briarproject.bramble.sync;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.event.EventBus;
@@ -47,6 +48,7 @@ class MailboxOutgoingSession extends SimplexOutgoingSession {
 	private final long initialCapacity;
 
 	MailboxOutgoingSession(DatabaseComponent db,
+			MetadataEncoder metadataEncoder,
 			EventBus eventBus,
 			ContactId contactId,
 			TransportId transportId,
@@ -55,8 +57,8 @@ class MailboxOutgoingSession extends SimplexOutgoingSession {
 			SyncRecordWriter recordWriter,
 			OutgoingSessionRecord sessionRecord,
 			long capacity) {
-		super(db, eventBus, contactId, transportId, maxLatency, streamWriter,
-				recordWriter);
+		super(db, metadataEncoder, eventBus, contactId, transportId,
+				maxLatency, streamWriter, recordWriter);
 		this.sessionRecord = sessionRecord;
 		this.initialCapacity = capacity;
 	}

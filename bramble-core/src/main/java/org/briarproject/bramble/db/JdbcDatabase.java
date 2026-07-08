@@ -3138,7 +3138,7 @@ abstract class JdbcDatabase implements Database<Connection> {
 		PreparedStatement ps = null;
 		try {
 			String sql = "UPDATE statuses SET seen = TRUE"
-					+ " WHERE messageId = ? AND contactId = ?";
+					+ " WHERE messageId = ? AND contactId = ? AND seen = FALSE";
 			ps = txn.prepareStatement(sql);
 			ps.setBytes(1, m.getBytes());
 			ps.setInt(2, c.getInt());

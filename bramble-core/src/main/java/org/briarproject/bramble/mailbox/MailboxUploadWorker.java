@@ -1,10 +1,15 @@
 package org.briarproject.bramble.mailbox;
 
 import org.briarproject.bramble.api.Cancellable;
+import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.connection.ConnectionRegistry;
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.Metadata;
+import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventExecutor;
@@ -19,6 +24,7 @@ import org.briarproject.bramble.api.sync.OutgoingSessionRecord;
 import org.briarproject.bramble.api.sync.event.GroupVisibilityUpdatedEvent;
 import org.briarproject.bramble.api.sync.event.MessageSharedEvent;
 import org.briarproject.bramble.api.sync.event.MessageToAckEvent;
+import org.briarproject.bramble.api.sync.event.MessageTransportUpdatedEvent;
 import org.briarproject.bramble.api.system.Clock;
 import org.briarproject.bramble.api.system.TaskScheduler;
 import org.briarproject.bramble.mailbox.ConnectivityChecker.ConnectivityObserver;
@@ -36,13 +42,16 @@ import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import static java.lang.Boolean.TRUE;
+import static java.util.Collections.singletonList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.logging.Level.INFO;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
+import static org.briarproject.bramble.api.mailbox.MailboxConstants.ID;
 import static org.briarproject.bramble.api.mailbox.MailboxConstants.MAX_LATENCY;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
 import static org.briarproject.bramble.util.IoUtils.delete;
 import static org.briarproject.bramble.util.LogUtils.logException;
 
@@ -103,6 +112,7 @@ class MailboxUploadWorker implements MailboxWorker, ConnectivityObserver,
 
 	private final Executor ioExecutor;
 	private final DatabaseComponent db;
+	private final MetadataEncoder metadataEncoder;
 	private final Clock clock;
 	private final TaskScheduler taskScheduler;
 	private final EventBus eventBus;
@@ -130,6 +140,7 @@ class MailboxUploadWorker implements MailboxWorker, ConnectivityObserver,
 
 	MailboxUploadWorker(@IoExecutor Executor ioExecutor,
 			DatabaseComponent db,
+			MetadataEncoder metadataEncoder,
 			Clock clock,
 			TaskScheduler taskScheduler,
 			EventBus eventBus,
@@ -143,6 +154,7 @@ class MailboxUploadWorker implements MailboxWorker, ConnectivityObserver,
 			ContactId contactId) {
 		this.ioExecutor = ioExecutor;
 		this.db = db;
+		this.metadataEncoder = metadataEncoder;
 		this.clock = clock;
 		this.taskScheduler = taskScheduler;
 		this.eventBus = eventBus;
@@ -368,10 +380,25 @@ class MailboxUploadWorker implements MailboxWorker, ConnectivityObserver,
 				}
 				if (!sent.isEmpty()) {
 					db.setMessagesSent(txn, contactId, sent, MAX_LATENCY);
+					for (MessageId m : sent) recordFirstSentTransport(txn, m);
 				}
 			});
 		} catch (DbException e) {
 			logException(LOG, WARNING, e);
+		} catch (FormatException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	private void recordFirstSentTransport(Transaction txn, MessageId m)
+			throws DbException, FormatException {
+		Metadata meta = db.getMessageMetadata(txn, m);
+		if (!meta.containsKey(KEY_FIRST_SENT_VIA_TRANSPORT)) {
+			BdfDictionary transportMeta = new BdfDictionary();
+			transportMeta.put(KEY_FIRST_SENT_VIA_TRANSPORT, ID.getString());
+			db.mergeMessageMetadata(txn, m, metadataEncoder.encode(transportMeta));
+			txn.attach(new MessageTransportUpdatedEvent(contactId,
+					singletonList(m)));
 		}
 	}
 

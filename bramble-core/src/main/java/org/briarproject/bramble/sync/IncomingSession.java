@@ -3,14 +3,19 @@ package org.briarproject.bramble.sync;
 import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.event.ContactRemovedEvent;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.Metadata;
+import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
 import org.briarproject.bramble.api.lifecycle.event.LifecycleEvent;
+import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.bramble.api.sync.Ack;
 import org.briarproject.bramble.api.sync.Message;
 import org.briarproject.bramble.api.sync.Offer;
@@ -32,6 +37,7 @@ import javax.annotation.concurrent.ThreadSafe;
 import static java.util.logging.Level.WARNING;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.lifecycle.LifecycleManager.LifecycleState.STOPPING;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_RECEIVED_VIA_TRANSPORT;
 import static org.briarproject.bramble.util.LogUtils.logException;
 
 /**
@@ -45,21 +51,26 @@ class IncomingSession implements SyncSession, EventListener {
 			getLogger(IncomingSession.class.getName());
 
 	private final DatabaseComponent db;
+	private final MetadataEncoder metadataEncoder;
 	private final Executor dbExecutor;
 	private final EventBus eventBus;
 	private final ContactId contactId;
+	private final TransportId transportId;
 	private final SyncRecordReader recordReader;
 	private final PriorityHandler priorityHandler;
 
 	private volatile boolean interrupted = false;
 
-	IncomingSession(DatabaseComponent db, Executor dbExecutor,
-			EventBus eventBus, ContactId contactId,
+	IncomingSession(DatabaseComponent db, MetadataEncoder metadataEncoder,
+			Executor dbExecutor, EventBus eventBus, ContactId contactId,
+			TransportId transportId,
 			SyncRecordReader recordReader, PriorityHandler priorityHandler) {
 		this.db = db;
+		this.metadataEncoder = metadataEncoder;
 		this.dbExecutor = dbExecutor;
 		this.eventBus = eventBus;
 		this.contactId = contactId;
+		this.transportId = transportId;
 		this.recordReader = recordReader;
 		this.priorityHandler = priorityHandler;
 	}
@@ -153,9 +164,20 @@ class IncomingSession implements SyncSession, EventListener {
 		@Override
 		public void run() {
 			try {
-				db.transaction(false, txn ->
-						db.receiveMessage(txn, contactId, message));
-			} catch (DbException e) {
+				db.transaction(false, txn -> {
+					if (!db.receiveMessage(txn, contactId, message)) return;
+					Metadata meta = db.getMessageMetadata(txn, message.getId());
+					if (!meta.containsKey(KEY_RECEIVED_VIA_TRANSPORT)) {
+						BdfDictionary transportMeta = new BdfDictionary();
+						transportMeta.put(KEY_RECEIVED_VIA_TRANSPORT,
+								transportId.getString());
+						db.mergeMessageMetadata(txn, message.getId(),
+								metadataEncoder.encode(transportMeta));
+					}
+				});
+			} catch (NoSuchMessageException e) {
+				// The DB may ignore invisible or unaccepted messages.
+			} catch (DbException | FormatException e) {
 				logException(LOG, WARNING, e);
 				interrupt();
 			}

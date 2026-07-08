@@ -2,6 +2,7 @@ package org.briarproject.bramble.mailbox;
 
 import org.briarproject.bramble.api.connection.ConnectionRegistry;
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
@@ -23,6 +24,7 @@ class MailboxWorkerFactoryImpl implements MailboxWorkerFactory {
 
 	private final Executor ioExecutor;
 	private final DatabaseComponent db;
+	private final MetadataEncoder metadataEncoder;
 	private final Clock clock;
 	private final TaskScheduler taskScheduler;
 	private final EventBus eventBus;
@@ -35,6 +37,7 @@ class MailboxWorkerFactoryImpl implements MailboxWorkerFactory {
 	@Inject
 	MailboxWorkerFactoryImpl(@IoExecutor Executor ioExecutor,
 			DatabaseComponent db,
+			MetadataEncoder metadataEncoder,
 			Clock clock,
 			TaskScheduler taskScheduler,
 			EventBus eventBus,
@@ -45,6 +48,7 @@ class MailboxWorkerFactoryImpl implements MailboxWorkerFactory {
 			MailboxUpdateManager mailboxUpdateManager) {
 		this.ioExecutor = ioExecutor;
 		this.db = db;
+		this.metadataEncoder = metadataEncoder;
 		this.clock = clock;
 		this.taskScheduler = taskScheduler;
 		this.eventBus = eventBus;
@@ -61,7 +65,7 @@ class MailboxWorkerFactoryImpl implements MailboxWorkerFactory {
 			MailboxProperties properties, MailboxFolderId folderId,
 			ContactId contactId) {
 		MailboxUploadWorker worker = new MailboxUploadWorker(ioExecutor, db,
-				clock, taskScheduler, eventBus, connectionRegistry,
+				metadataEncoder, clock, taskScheduler, eventBus, connectionRegistry,
 				connectivityChecker, mailboxApiCaller, mailboxApi,
 				mailboxFileManager, properties, folderId, contactId);
 		eventBus.addListener(worker);

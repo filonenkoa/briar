@@ -1,6 +1,7 @@
 package org.briarproject.bramble.sync;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
 import org.briarproject.bramble.api.event.EventBus;
@@ -33,6 +34,7 @@ import static org.briarproject.bramble.api.mailbox.MailboxConstants.MAX_FILE_PAY
 class SyncSessionFactoryImpl implements SyncSessionFactory {
 
 	private final DatabaseComponent db;
+	private final MetadataEncoder metadataEncoder;
 	private final Executor dbExecutor;
 	private final EventBus eventBus;
 	private final Clock clock;
@@ -41,10 +43,12 @@ class SyncSessionFactoryImpl implements SyncSessionFactory {
 
 	@Inject
 	SyncSessionFactoryImpl(DatabaseComponent db,
+			MetadataEncoder metadataEncoder,
 			@DatabaseExecutor Executor dbExecutor, EventBus eventBus,
 			Clock clock, SyncRecordReaderFactory recordReaderFactory,
 			SyncRecordWriterFactory recordWriterFactory) {
 		this.db = db;
+		this.metadataEncoder = metadataEncoder;
 		this.dbExecutor = dbExecutor;
 		this.eventBus = eventBus;
 		this.clock = clock;
@@ -53,12 +57,12 @@ class SyncSessionFactoryImpl implements SyncSessionFactory {
 	}
 
 	@Override
-	public SyncSession createIncomingSession(ContactId c, InputStream in,
-			PriorityHandler handler) {
+	public SyncSession createIncomingSession(ContactId c, TransportId t,
+			InputStream in, PriorityHandler handler) {
 		SyncRecordReader recordReader =
 				recordReaderFactory.createRecordReader(in);
-		return new IncomingSession(db, dbExecutor, eventBus, c, recordReader,
-				handler);
+		return new IncomingSession(db, metadataEncoder, dbExecutor, eventBus, c,
+				t, recordReader, handler);
 	}
 
 	@Override
@@ -68,11 +72,11 @@ class SyncSessionFactoryImpl implements SyncSessionFactory {
 		SyncRecordWriter recordWriter =
 				recordWriterFactory.createRecordWriter(out);
 		if (eager) {
-			return new EagerSimplexOutgoingSession(db, eventBus, c, t,
-					maxLatency, streamWriter, recordWriter);
+			return new EagerSimplexOutgoingSession(db, metadataEncoder,
+					eventBus, c, t, maxLatency, streamWriter, recordWriter);
 		} else {
-			return new SimplexOutgoingSession(db, eventBus, c, t,
-					maxLatency, streamWriter, recordWriter);
+			return new SimplexOutgoingSession(db, metadataEncoder, eventBus, c,
+					t, maxLatency, streamWriter, recordWriter);
 		}
 	}
 
@@ -83,8 +87,8 @@ class SyncSessionFactoryImpl implements SyncSessionFactory {
 		OutputStream out = streamWriter.getOutputStream();
 		SyncRecordWriter recordWriter =
 				recordWriterFactory.createRecordWriter(out);
-		return new MailboxOutgoingSession(db, eventBus, c, t, maxLatency,
-				streamWriter, recordWriter, sessionRecord,
+		return new MailboxOutgoingSession(db, metadataEncoder, eventBus, c, t,
+				maxLatency, streamWriter, recordWriter, sessionRecord,
 				MAX_FILE_PAYLOAD_BYTES);
 	}
 
@@ -95,7 +99,8 @@ class SyncSessionFactoryImpl implements SyncSessionFactory {
 		OutputStream out = streamWriter.getOutputStream();
 		SyncRecordWriter recordWriter =
 				recordWriterFactory.createRecordWriter(out);
-		return new DuplexOutgoingSession(db, dbExecutor, eventBus, clock, c, t,
-				maxLatency, maxIdleTime, streamWriter, recordWriter, priority);
+		return new DuplexOutgoingSession(db, metadataEncoder, dbExecutor,
+				eventBus, clock, c, t, maxLatency, maxIdleTime, streamWriter,
+				recordWriter, priority);
 	}
 }

@@ -10,9 +10,12 @@ import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventListener;
 import org.briarproject.bramble.api.lifecycle.IoExecutor;
+import org.briarproject.bramble.api.plugin.BluetoothConstants;
 import org.briarproject.bramble.api.plugin.ConnectionHandler;
+import org.briarproject.bramble.api.plugin.LanTcpConstants;
 import org.briarproject.bramble.api.plugin.Plugin;
 import org.briarproject.bramble.api.plugin.PluginManager;
+import org.briarproject.bramble.api.plugin.TorConstants;
 import org.briarproject.bramble.api.plugin.TransportConnectionReader;
 import org.briarproject.bramble.api.plugin.TransportConnectionWriter;
 import org.briarproject.bramble.api.plugin.TransportId;
@@ -119,6 +122,10 @@ class PollerImpl implements Poller, EventListener {
 			TransportInactiveEvent t = (TransportInactiveEvent) e;
 			// Cancel polling for the deactivated transport
 			cancel(t.getTransportId());
+			if (t.getTransportId().equals(TorConstants.ID)) {
+				pollNow(LanTcpConstants.ID);
+				pollNow(BluetoothConstants.ID);
+			}
 		}
 	}
 

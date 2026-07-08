@@ -1820,7 +1820,8 @@ public abstract class JdbcDatabaseTest extends BrambleTestCase {
 		assertFalse(status.isSeen());
 
 		// Pretend the message was acked by the contact
-		db.raiseSeenFlag(txn, contactId, messageId);
+		assertTrue(db.raiseSeenFlag(txn, contactId, messageId));
+		assertFalse(db.raiseSeenFlag(txn, contactId, messageId));
 
 		// The message should be sent and seen
 		status = db.getMessageStatus(txn, contactId, messageId);

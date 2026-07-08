@@ -1,6 +1,7 @@
 package org.briarproject.bramble.sync;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
 import org.briarproject.bramble.api.event.EventBus;
@@ -32,14 +33,15 @@ class EagerSimplexOutgoingSession extends SimplexOutgoingSession {
 			getLogger(EagerSimplexOutgoingSession.class.getName());
 
 	EagerSimplexOutgoingSession(DatabaseComponent db,
+			MetadataEncoder metadataEncoder,
 			EventBus eventBus,
 			ContactId contactId,
 			TransportId transportId,
 			long maxLatency,
 			StreamWriter streamWriter,
 			SyncRecordWriter recordWriter) {
-		super(db, eventBus, contactId, transportId, maxLatency, streamWriter,
-				recordWriter);
+		super(db, metadataEncoder, eventBus, contactId, transportId,
+				maxLatency, streamWriter, recordWriter);
 	}
 
 	@Override
@@ -50,6 +52,7 @@ class EagerSimplexOutgoingSession extends SimplexOutgoingSession {
 					db.getMessageToSend(txn, contactId, m, maxLatency, true));
 			if (message == null) continue; // No longer shared
 			recordWriter.writeMessage(message);
+			recordFirstSentTransport(message);
 			LOG.info("Sent message");
 		}
 	}

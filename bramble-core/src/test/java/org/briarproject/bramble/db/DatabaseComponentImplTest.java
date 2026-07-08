@@ -1289,8 +1289,8 @@ public class DatabaseComponentImplTest extends BrambleMockTestCase {
 
 		db.transaction(false, transaction -> {
 			// Receive the message twice
-			db.receiveMessage(transaction, contactId, message);
-			db.receiveMessage(transaction, contactId, message);
+			assertTrue(db.receiveMessage(transaction, contactId, message));
+			assertFalse(db.receiveMessage(transaction, contactId, message));
 		});
 	}
 
@@ -1316,7 +1316,7 @@ public class DatabaseComponentImplTest extends BrambleMockTestCase {
 				eventExecutor, shutdownManager);
 
 		db.transaction(false, transaction ->
-				db.receiveMessage(transaction, contactId, message));
+				assertFalse(db.receiveMessage(transaction, contactId, message)));
 	}
 
 	@Test
@@ -1334,7 +1334,7 @@ public class DatabaseComponentImplTest extends BrambleMockTestCase {
 				eventExecutor, shutdownManager);
 
 		db.transaction(false, transaction ->
-				db.receiveMessage(transaction, contactId, message));
+				assertFalse(db.receiveMessage(transaction, contactId, message)));
 	}
 
 	@Test

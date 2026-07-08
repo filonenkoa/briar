@@ -5,9 +5,12 @@ import org.briarproject.bramble.api.connection.ConnectionManager;
 import org.briarproject.bramble.api.connection.ConnectionRegistry;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.event.ContactAddedEvent;
+import org.briarproject.bramble.api.plugin.BluetoothConstants;
 import org.briarproject.bramble.api.plugin.ConnectionHandler;
+import org.briarproject.bramble.api.plugin.LanTcpConstants;
 import org.briarproject.bramble.api.plugin.Plugin;
 import org.briarproject.bramble.api.plugin.PluginManager;
+import org.briarproject.bramble.api.plugin.TorConstants;
 import org.briarproject.bramble.api.plugin.TransportConnectionWriter;
 import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.bramble.api.plugin.duplex.DuplexPlugin;
@@ -435,6 +438,41 @@ public class PollerImplTest extends BrambleMockTestCase {
 
 		poller.eventOccurred(new TransportActiveEvent(transportId));
 		poller.eventOccurred(new TransportInactiveEvent(transportId));
+	}
+
+	@Test
+	public void testPollsLocalTransportsWhenTorDeactivated() {
+		Plugin lanPlugin = context.mock(Plugin.class, "lanPlugin");
+		Plugin bluetoothPlugin = context.mock(Plugin.class, "bluetoothPlugin");
+
+		context.checking(new Expectations() {{
+			allowing(lanPlugin).getId();
+			will(returnValue(LanTcpConstants.ID));
+			allowing(bluetoothPlugin).getId();
+			will(returnValue(BluetoothConstants.ID));
+
+			oneOf(pluginManager).getPlugin(LanTcpConstants.ID);
+			will(returnValue(lanPlugin));
+			oneOf(lanPlugin).shouldPoll();
+			will(returnValue(true));
+			oneOf(clock).currentTimeMillis();
+			will(returnValue(now));
+			oneOf(scheduler).schedule(with(any(Runnable.class)), with(ioExecutor),
+					with(0L), with(MILLISECONDS));
+			will(returnValue(cancellable));
+
+			oneOf(pluginManager).getPlugin(BluetoothConstants.ID);
+			will(returnValue(bluetoothPlugin));
+			oneOf(bluetoothPlugin).shouldPoll();
+			will(returnValue(true));
+			oneOf(clock).currentTimeMillis();
+			will(returnValue(now));
+			oneOf(scheduler).schedule(with(any(Runnable.class)), with(ioExecutor),
+					with(0L), with(MILLISECONDS));
+			will(returnValue(cancellable));
+		}});
+
+		poller.eventOccurred(new TransportInactiveEvent(TorConstants.ID));
 	}
 
 	private void expectReschedule(Plugin plugin) {

@@ -1,7 +1,10 @@
 package org.briarproject.bramble.sync;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.plugin.TransportId;
@@ -21,6 +24,7 @@ import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_IDS;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
 import static org.briarproject.bramble.test.TestUtils.getContactId;
 import static org.briarproject.bramble.test.TestUtils.getMessage;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
@@ -31,6 +35,8 @@ public class EagerSimplexOutgoingSessionTest extends BrambleMockTestCase {
 	private static final int MAX_LATENCY = Integer.MAX_VALUE;
 
 	private final DatabaseComponent db = context.mock(DatabaseComponent.class);
+	private final MetadataEncoder metadataEncoder =
+			context.mock(MetadataEncoder.class);
 	private final EventBus eventBus = context.mock(EventBus.class);
 	private final StreamWriter streamWriter = context.mock(StreamWriter.class);
 	private final SyncRecordWriter recordWriter =
@@ -44,12 +50,14 @@ public class EagerSimplexOutgoingSessionTest extends BrambleMockTestCase {
 			MAX_MESSAGE_BODY_LENGTH);
 	private final Message message1 = getMessage(new GroupId(getRandomId()),
 			MAX_MESSAGE_BODY_LENGTH);
+	private final Metadata encodedMetadata = new Metadata();
 
 	@Test
 	public void testNothingToSendEagerly() throws Exception {
 		EagerSimplexOutgoingSession session =
-				new EagerSimplexOutgoingSession(db, eventBus, contactId,
-						transportId, MAX_LATENCY, streamWriter, recordWriter);
+				new EagerSimplexOutgoingSession(db, metadataEncoder, eventBus,
+						contactId, transportId, MAX_LATENCY, streamWriter,
+						recordWriter);
 
 		Transaction noAckTxn = new Transaction(null, false);
 		Transaction noIdsTxn = new Transaction(null, true);
@@ -81,14 +89,20 @@ public class EagerSimplexOutgoingSessionTest extends BrambleMockTestCase {
 	@Test
 	public void testSomethingToSendEagerly() throws Exception {
 		EagerSimplexOutgoingSession session =
-				new EagerSimplexOutgoingSession(db, eventBus, contactId,
-						transportId, MAX_LATENCY, streamWriter, recordWriter);
+				new EagerSimplexOutgoingSession(db, metadataEncoder, eventBus,
+						contactId, transportId, MAX_LATENCY, streamWriter,
+						recordWriter);
 
 		Transaction ackTxn = new Transaction(null, false);
 		Transaction noAckTxn = new Transaction(null, false);
 		Transaction idsTxn = new Transaction(null, true);
 		Transaction msgTxn = new Transaction(null, false);
 		Transaction msgTxn1 = new Transaction(null, false);
+		Transaction metaTxn = new Transaction(null, false);
+		Metadata emptyMetadata = new Metadata();
+		BdfDictionary transportMetadata = new BdfDictionary();
+		transportMetadata.put(KEY_FIRST_SENT_VIA_TRANSPORT,
+				transportId.getString());
 
 		context.checking(new DbExpectations() {{
 			// Add listener
@@ -122,6 +136,13 @@ public class EagerSimplexOutgoingSessionTest extends BrambleMockTestCase {
 			oneOf(db).getMessageToSend(msgTxn1, contactId, message1.getId(),
 					MAX_LATENCY, true);
 			will(returnValue(message1));
+			oneOf(db).transaction(with(false), withDbRunnable(metaTxn));
+			oneOf(db).getMessageMetadata(metaTxn, message1.getId());
+			will(returnValue(emptyMetadata));
+			oneOf(metadataEncoder).encode(transportMetadata);
+			will(returnValue(encodedMetadata));
+			oneOf(db).mergeMessageMetadata(metaTxn, message1.getId(),
+					encodedMetadata);
 			oneOf(recordWriter).writeMessage(message1);
 			// Send the end of stream marker
 			oneOf(streamWriter).sendEndOfStream();

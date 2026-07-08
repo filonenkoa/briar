@@ -959,12 +959,13 @@ class DatabaseComponentImpl<T> implements DatabaseComponent {
 	}
 
 	@Override
-	public void receiveMessage(Transaction transaction, ContactId c, Message m)
+	public boolean receiveMessage(Transaction transaction, ContactId c, Message m)
 			throws DbException {
 		if (transaction.isReadOnly()) throw new IllegalArgumentException();
 		T txn = unbox(transaction);
 		if (!db.containsContact(txn, c))
 			throw new NoSuchContactException();
+		boolean stored = false;
 		if (db.getGroupVisibility(txn, c, m.getGroupId()) != INVISIBLE) {
 			if (db.containsMessage(txn, m.getId())) {
 				db.raiseSeenFlag(txn, c, m.getId());
@@ -972,9 +973,11 @@ class DatabaseComponentImpl<T> implements DatabaseComponent {
 			} else {
 				db.addMessage(txn, m, UNKNOWN, false, false, c);
 				transaction.attach(new MessageAddedEvent(m, c));
+				stored = true;
 			}
 			transaction.attach(new MessageToAckEvent(c));
 		}
+		return stored;
 	}
 
 	@Override

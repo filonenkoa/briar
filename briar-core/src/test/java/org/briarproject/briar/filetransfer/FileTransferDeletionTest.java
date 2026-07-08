@@ -468,11 +468,16 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
 		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
 				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+		BdfDictionary chunkQuery = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
+				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK));
 
 		context.checking(new Expectations() {{
 			oneOf(db).transaction(with(false), with(any(DbRunnable.class)));
 			will(runDbRunnable(txn));
 			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getMessageIds(txn, group.getId(), chunkQuery);
+			will(returnValue(Collections.emptySet()));
 			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
 			will(returnValue(groupMeta));
 			oneOf(clientVersioningManager).getClientMinorVersion(txn,
@@ -506,6 +511,9 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
 		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
 				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+		BdfDictionary chunkQuery = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
+				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK));
 		BdfList body = BdfList.of(MSG_TYPE_CONTROL, fileId.getBytes(),
 				TRANSFER_STATE_CANCELLED_BY_SENDER);
 
@@ -513,6 +521,8 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 			oneOf(db).transaction(with(false), with(any(DbRunnable.class)));
 			will(runDbRunnable(txn));
 			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getMessageIds(txn, group.getId(), chunkQuery);
+			will(returnValue(Collections.emptySet()));
 			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
 			will(returnValue(groupMeta));
 			oneOf(clientVersioningManager).getClientMinorVersion(txn,
@@ -520,6 +530,54 @@ public class FileTransferDeletionTest extends BrambleMockTestCase {
 			will(returnValue(MINOR_VERSION));
 			oneOf(clientHelper).createMessage(with(equal(group.getId())),
 					with(any(Long.class)), with(equal(body)));
+			will(returnValue(control));
+			oneOf(clientHelper).addLocalMessage(with(same(txn)),
+					with(same(control)), with(any(BdfDictionary.class)), with(true),
+					with(false));
+			will(assertControlMetadata(fileId,
+					TRANSFER_STATE_CANCELLED_BY_SENDER));
+		}});
+
+		manager.cancelFileTransfer(header);
+	}
+
+	@Test
+	public void testCancelFileTransferUnsharesChunks() throws Exception {
+		Transaction txn = new Transaction(null, false);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		MessageId chunkId1 = new MessageId(getRandomId());
+		MessageId chunkId2 = new MessageId(getRandomId());
+		Message control = new Message(new MessageId(getRandomId()),
+				group.getId(), 2, new byte[] {1});
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, true, true, false, false, 0, fileId,
+				"file.bin", "application/octet-stream", 2L, 2);
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		BdfDictionary terminal = BdfDictionary.of(new BdfEntry(
+				MSG_KEY_TRANSFER_STATE, TRANSFER_STATE_CANCELLED_BY_SENDER));
+		BdfDictionary chunkQuery = BdfDictionary.of(
+				new BdfEntry(MSG_KEY_FILE_ID, fileId.getBytes()),
+				new BdfEntry(MSG_KEY_MSG_TYPE, MSG_TYPE_CHUNK));
+
+		context.checking(new Expectations() {{
+			oneOf(db).transaction(with(false), with(any(DbRunnable.class)));
+			will(runDbRunnable(txn));
+			oneOf(clientHelper).mergeMessageMetadata(txn, headerId, terminal);
+			oneOf(clientHelper).getMessageIds(txn, group.getId(), chunkQuery);
+			will(returnValue(new HashSet<>(Arrays.asList(chunkId1, chunkId2))));
+			oneOf(db).setMessageNotShared(txn, chunkId1);
+			oneOf(db).setMessageNotShared(txn, chunkId2);
+			oneOf(clientHelper).getGroupMetadataAsDictionary(txn, group.getId());
+			will(returnValue(groupMeta));
+			oneOf(clientVersioningManager).getClientMinorVersion(txn,
+					contact.getId(), CLIENT_ID, MAJOR_VERSION);
+			will(returnValue(MINOR_VERSION));
+			oneOf(clientHelper).createMessage(with(equal(group.getId())),
+					with(any(Long.class)), with(any(BdfList.class)));
 			will(returnValue(control));
 			oneOf(clientHelper).addLocalMessage(with(same(txn)),
 					with(same(control)), with(any(BdfDictionary.class)), with(true),

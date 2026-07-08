@@ -87,6 +87,10 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 			statusLayout.setBackgroundResource(R.drawable.msg_status_bubble);
 			time.setTextColor(timeColorBubble);
 			setImageTintList(bomb, ColorStateList.valueOf(timeColorBubble));
+			if (messageTransport != null) {
+				setImageTintList(messageTransport,
+						ColorStateList.valueOf(timeColorBubble));
+			}
 			constraintSet = imageConstraints;
 		} else {
 			resetStatusLayoutForText();
@@ -115,6 +119,9 @@ class ConversationMessageViewHolder extends ConversationItemViewHolder {
 		statusLayout.setPadding(0, 0, 0, 0);
 		time.setTextColor(timeColor);
 		setImageTintList(bomb, ColorStateList.valueOf(timeColor));
+		if (messageTransport != null) {
+			setImageTintList(messageTransport, ColorStateList.valueOf(timeColor));
+		}
 	}
 
 }

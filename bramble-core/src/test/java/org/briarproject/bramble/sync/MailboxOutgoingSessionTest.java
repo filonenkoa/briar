@@ -1,6 +1,7 @@
 package org.briarproject.bramble.sync;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
@@ -39,6 +40,8 @@ public class MailboxOutgoingSessionTest extends BrambleMockTestCase {
 	private static final int MAX_LATENCY = Integer.MAX_VALUE;
 
 	private final DatabaseComponent db = context.mock(DatabaseComponent.class);
+	private final MetadataEncoder metadataEncoder =
+			context.mock(MetadataEncoder.class);
 	private final EventBus eventBus = context.mock(EventBus.class);
 	private final StreamWriter streamWriter = context.mock(StreamWriter.class);
 	private final SyncRecordWriter recordWriter =
@@ -56,7 +59,7 @@ public class MailboxOutgoingSessionTest extends BrambleMockTestCase {
 	public void testNothingToSend() throws Exception {
 		OutgoingSessionRecord sessionRecord = new OutgoingSessionRecord();
 		MailboxOutgoingSession session = new MailboxOutgoingSession(db,
-				eventBus, contactId, transportId, MAX_LATENCY,
+				metadataEncoder, eventBus, contactId, transportId, MAX_LATENCY,
 				streamWriter, recordWriter, sessionRecord,
 				MAX_FILE_PAYLOAD_BYTES);
 
@@ -100,14 +103,13 @@ public class MailboxOutgoingSessionTest extends BrambleMockTestCase {
 	public void testSomethingToSend() throws Exception {
 		OutgoingSessionRecord sessionRecord = new OutgoingSessionRecord();
 		MailboxOutgoingSession session = new MailboxOutgoingSession(db,
-				eventBus, contactId, transportId, MAX_LATENCY,
+				metadataEncoder, eventBus, contactId, transportId, MAX_LATENCY,
 				streamWriter, recordWriter, sessionRecord,
 				MAX_FILE_PAYLOAD_BYTES);
 
 		Transaction ackIdTxn = new Transaction(null, true);
 		Transaction msgIdTxn = new Transaction(null, true);
 		Transaction msgTxn = new Transaction(null, true);
-
 		int ackRecordBytes = RECORD_HEADER_BYTES + MessageId.LENGTH;
 		long capacityForMessages =
 				MAX_FILE_PAYLOAD_BYTES - versionRecordBytes - ackRecordBytes;
@@ -170,7 +172,7 @@ public class MailboxOutgoingSessionTest extends BrambleMockTestCase {
 
 		OutgoingSessionRecord sessionRecord = new OutgoingSessionRecord();
 		MailboxOutgoingSession session = new MailboxOutgoingSession(db,
-				eventBus, contactId, transportId, MAX_LATENCY,
+				metadataEncoder, eventBus, contactId, transportId, MAX_LATENCY,
 				streamWriter, recordWriter, sessionRecord, capacity);
 
 		Transaction ackIdTxn = new Transaction(null, true);

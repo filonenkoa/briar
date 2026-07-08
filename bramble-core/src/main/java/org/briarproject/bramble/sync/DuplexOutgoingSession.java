@@ -2,9 +2,13 @@ package org.briarproject.bramble.sync;
 
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.event.ContactRemovedEvent;
+import org.briarproject.bramble.api.FormatException;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DatabaseExecutor;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
@@ -24,6 +28,7 @@ import org.briarproject.bramble.api.sync.SyncSession;
 import org.briarproject.bramble.api.sync.Versions;
 import org.briarproject.bramble.api.sync.event.CloseSyncConnectionsEvent;
 import org.briarproject.bramble.api.sync.event.GroupVisibilityUpdatedEvent;
+import org.briarproject.bramble.api.sync.event.MessageTransportUpdatedEvent;
 import org.briarproject.bramble.api.sync.event.MessageRequestedEvent;
 import org.briarproject.bramble.api.sync.event.MessageSharedEvent;
 import org.briarproject.bramble.api.sync.event.MessageToAckEvent;
@@ -34,6 +39,7 @@ import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -54,6 +60,7 @@ import static org.briarproject.bramble.api.record.Record.RECORD_HEADER_BYTES;
 import static org.briarproject.bramble.api.sync.Group.Visibility.SHARED;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_IDS;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_LENGTH;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
 import static org.briarproject.bramble.api.sync.SyncConstants.SUPPORTED_VERSIONS;
 import static org.briarproject.bramble.util.LogUtils.logException;
 
@@ -87,6 +94,7 @@ class DuplexOutgoingSession implements SyncSession, EventListener {
 			(RECORD_HEADER_BYTES + MAX_MESSAGE_LENGTH) * 2;
 
 	private final DatabaseComponent db;
+	private final MetadataEncoder metadataEncoder;
 	private final Executor dbExecutor;
 	private final EventBus eventBus;
 	private final Clock clock;
@@ -108,12 +116,14 @@ class DuplexOutgoingSession implements SyncSession, EventListener {
 
 	private volatile boolean interrupted = false;
 
-	DuplexOutgoingSession(DatabaseComponent db, Executor dbExecutor,
+	DuplexOutgoingSession(DatabaseComponent db, MetadataEncoder metadataEncoder,
+			Executor dbExecutor,
 			EventBus eventBus, Clock clock, ContactId contactId,
 			TransportId transportId, long maxLatency, int maxIdleTime,
 			StreamWriter streamWriter, SyncRecordWriter recordWriter,
 			@Nullable Priority priority) {
 		this.db = db;
+		this.metadataEncoder = metadataEncoder;
 		this.dbExecutor = dbExecutor;
 		this.eventBus = eventBus;
 		this.clock = clock;
@@ -346,9 +356,43 @@ class DuplexOutgoingSession implements SyncSession, EventListener {
 		@Override
 		public void run() throws IOException {
 			if (interrupted) return;
-			for (Message m : batch) recordWriter.writeMessage(m);
+			for (Message m : batch) {
+				recordWriter.writeMessage(m);
+				dbExecutor.execute(new RecordFirstSentTransport(m));
+			}
 			LOG.info("Sent batch");
 			generateBatch();
+		}
+	}
+
+	private class RecordFirstSentTransport implements Runnable {
+
+		private final Message message;
+
+		private RecordFirstSentTransport(Message message) {
+			this.message = message;
+		}
+
+		@DatabaseExecutor
+		@Override
+		public void run() {
+			try {
+				db.transaction(false, txn -> {
+					Metadata meta = db.getMessageMetadata(txn, message.getId());
+					if (!meta.containsKey(KEY_FIRST_SENT_VIA_TRANSPORT)) {
+						BdfDictionary transportMeta = new BdfDictionary();
+						transportMeta.put(KEY_FIRST_SENT_VIA_TRANSPORT,
+								transportId.getString());
+						db.mergeMessageMetadata(txn, message.getId(),
+								metadataEncoder.encode(transportMeta));
+						txn.attach(new MessageTransportUpdatedEvent(contactId,
+								Collections.singletonList(message.getId())));
+					}
+				});
+			} catch (DbException | FormatException e) {
+				logException(LOG, WARNING, e);
+				interrupt();
+			}
 		}
 	}
 

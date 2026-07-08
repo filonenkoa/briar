@@ -15,8 +15,8 @@ public interface SyncSessionFactory {
 	/**
 	 * Creates a session for receiving data from a contact.
 	 */
-	SyncSession createIncomingSession(ContactId c, InputStream in,
-			PriorityHandler handler);
+	SyncSession createIncomingSession(ContactId c, TransportId t,
+			InputStream in, PriorityHandler handler);
 
 	/**
 	 * Creates a session for sending data to a contact over a simplex transport.

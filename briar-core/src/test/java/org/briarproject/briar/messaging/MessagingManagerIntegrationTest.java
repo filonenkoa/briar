@@ -1,8 +1,12 @@
 package org.briarproject.briar.messaging;
 
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.BdfEntry;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.MessageDeletedException;
+import org.briarproject.bramble.api.plugin.BluetoothConstants;
+import org.briarproject.bramble.api.plugin.LanTcpConstants;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.bramble.test.TestDatabaseConfigModule;
@@ -30,6 +34,8 @@ import javax.annotation.Nullable;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptySet;
 import static java.util.Collections.singletonList;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_RECEIVED_VIA_TRANSPORT;
 import static org.briarproject.bramble.test.TestUtils.getRandomBytes;
 import static org.briarproject.bramble.util.StringUtils.getRandomString;
 import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.MIN_AUTO_DELETE_TIMER_MS;
@@ -37,6 +43,7 @@ import static org.briarproject.briar.api.autodelete.AutoDeleteConstants.NO_AUTO_
 import static org.briarproject.briar.test.BriarTestUtils.assertGroupCount;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -124,6 +131,48 @@ public class MessagingManagerIntegrationTest
 		assertEquals(2, messages1.size());
 		assertGroupCounts(c0, 2, 1);
 		assertGroupCounts(c1, 2, 1);
+	}
+
+	@Test
+	public void testMessageHeadersIncludeTransferTransport() throws Exception {
+		PrivateMessage sent = sendMessage(c0, c1, getRandomString(42));
+		PrivateMessage received = sendMessage(c1, c0, getRandomString(42));
+
+		c0.getClientHelper().mergeMessageMetadata(sent.getMessage().getId(),
+				BdfDictionary.of(new BdfEntry(KEY_FIRST_SENT_VIA_TRANSPORT,
+						LanTcpConstants.ID.getString())));
+		c0.getClientHelper().mergeMessageMetadata(received.getMessage().getId(),
+				BdfDictionary.of(new BdfEntry(KEY_RECEIVED_VIA_TRANSPORT,
+						BluetoothConstants.ID.getString())));
+
+		PrivateMessageHeader localHeader = null, remoteHeader = null;
+		for (ConversationMessageHeader h : getMessages(c0)) {
+			PrivateMessageHeader p = (PrivateMessageHeader) h;
+			if (p.getId().equals(sent.getMessage().getId())) localHeader = p;
+			else if (p.getId().equals(received.getMessage().getId())) {
+				remoteHeader = p;
+			}
+		}
+
+		assertTrue(localHeader != null);
+		assertTrue(remoteHeader != null);
+		assertEquals(LanTcpConstants.ID, localHeader.getTransportId());
+		assertEquals(BluetoothConstants.ID, remoteHeader.getTransportId());
+	}
+
+	@Test
+	public void testMessageHeaderTransportIsNullIfMetadataMissing()
+			throws Exception {
+		GroupId g = c0.getMessagingManager().getConversationId(contactId);
+		PrivateMessage m = messageFactory.createPrivateMessage(g,
+				c0.getClock().currentTimeMillis(), getRandomString(42),
+				emptyList(), NO_AUTO_DELETE_TIMER);
+		c0.getMessagingManager().addLocalMessage(m);
+
+		PrivateMessageHeader header =
+				(PrivateMessageHeader) getMessages(c0).iterator().next();
+
+		assertNull(header.getTransportId());
 	}
 
 	@Test

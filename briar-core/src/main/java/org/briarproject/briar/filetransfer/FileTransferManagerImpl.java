@@ -969,6 +969,7 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		db.transaction(false, txn -> {
 			try {
 				setTransferState(txn, h.getId(), transferState);
+				if (h.isLocal()) unshareOutgoingChunks(txn, h);
 				storeControlMessage(txn, h, transferState);
 				invalidateOutgoingProgressCache(h.getFileId());
 				scheduleDeleteFileDir(txn, h.getFileId());
@@ -976,6 +977,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 				throw new DbException(e);
 			}
 		});
+	}
+
+	private void unshareOutgoingChunks(Transaction txn, FileTransferHeader h)
+			throws DbException {
+		Collection<MessageId> chunkIds = getOutgoingChunkIds(txn, h.getGroupId(),
+				h.getFileId());
+		for (MessageId chunkId : chunkIds) db.setMessageNotShared(txn, chunkId);
 	}
 
 	private void storeControlMessage(Transaction txn, FileTransferHeader h,
@@ -1028,13 +1036,13 @@ class FileTransferManagerImpl implements FileTransferManager, IncomingMessageHoo
 		if (chunkIds.size() <= GROUP_STATUS_SCAN_THRESHOLD) {
 			for (MessageId id : chunkIds) {
 				MessageStatus s = db.getMessageStatus(txn, contactId, id);
-				if (s.isSent()) transferredChunks++;
+				if (s.isSeen()) transferredChunks++;
 			}
 		} else {
 			Collection<MessageId> chunkIdSet = chunkIds instanceof Set ?
 					chunkIds : new HashSet<>(chunkIds);
 			for (MessageStatus s : db.getMessageStatus(txn, contactId, groupId)) {
-				if (chunkIdSet.contains(s.getMessageId()) && s.isSent()) {
+				if (chunkIdSet.contains(s.getMessageId()) && s.isSeen()) {
 					transferredChunks++;
 				}
 			}

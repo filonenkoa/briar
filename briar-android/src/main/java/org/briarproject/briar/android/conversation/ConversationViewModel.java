@@ -54,6 +54,7 @@ import org.briarproject.briar.api.messaging.PrivateMessageHeader;
 import org.briarproject.briar.api.messaging.event.AttachmentReceivedEvent;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -97,6 +98,7 @@ public class ConversationViewModel extends DbViewModel
 			"showOnboardingImage";
 	private static final String SHOW_ONBOARDING_INTRODUCTION =
 			"showOnboardingIntroduction";
+	private static final long FILE_PROGRESS_POLL_MS = 10_000L;
 
 	private final TransactionManager db;
 	private final EventBus eventBus;
@@ -112,6 +114,8 @@ public class ConversationViewModel extends DbViewModel
 	private final FileTransferManager fileTransferManager;
 	private final Handler fileHandler = new Handler(Looper.getMainLooper());
 	private final Map<MessageId, MutableLiveData<FileTransferProgress>> fileProgress =
+			new HashMap<>();
+	private final Map<MessageId, FileTransferHeader> fileProgressHeaders =
 			new HashMap<>();
 	private final Map<MessageId, Runnable> fileProgressPollers = new HashMap<>();
 	private volatile boolean cleared = false;
@@ -192,6 +196,7 @@ public class ConversationViewModel extends DbViewModel
 			fileHandler.removeCallbacks(r);
 		}
 		fileProgressPollers.clear();
+		fileProgressHeaders.clear();
 		fileProgress.clear();
 	}
 
@@ -381,7 +386,7 @@ public class ConversationViewModel extends DbViewModel
 							message.getId(), message.getGroupId(),
 							message.getTimestamp(), true, true, false, false,
 							m.hasText(), m.getAttachmentHeaders(),
-							m.getAutoDeleteTimer());
+							m.getAutoDeleteTimer(), null);
 					// TODO add text to cache when available here
 					MessageId id = message.getId();
 					txn.attach(() -> {
@@ -481,9 +486,19 @@ public class ConversationViewModel extends DbViewModel
 			live = new MutableLiveData<>();
 			if (cleared) return live;
 			fileProgress.put(h.getId(), live);
+			fileProgressHeaders.put(h.getId(), h);
 			startFileProgressPolling(h, live);
 		}
 		return live;
+	}
+
+	@UiThread
+	void refreshFileProgress() {
+		if (cleared) return;
+		for (FileTransferHeader h : new ArrayList<>(fileProgressHeaders.values())) {
+			MutableLiveData<FileTransferProgress> live = fileProgress.get(h.getId());
+			if (live != null) loadFileProgress(h, live, null);
+		}
 	}
 
 	@UiThread
@@ -495,37 +510,45 @@ public class ConversationViewModel extends DbViewModel
 			@Override
 			public void run() {
 				if (cleared || fileProgressPollers.get(id) != this) return;
-				runOnDbThread(() -> {
-					FileTransferProgress p;
-					try {
-						p = fileTransferManager.getProgress(h);
-					} catch (DbException e) {
-						FileTransferProgress old = live.getValue();
-						long transferred =
-								old == null ? 0 : old.getTransferred();
-						p = new FileTransferProgress(
-								FileTransferProgress.State.ERROR, transferred,
-								h.getFileSize());
+				loadFileProgress(h, live, () -> {
+					if (!cleared && fileProgressPollers.get(id) == this) {
+						fileHandler.postDelayed(this, FILE_PROGRESS_POLL_MS);
 					}
-					FileTransferProgress progress = p;
-					fileHandler.post(() -> {
-						if (cleared || fileProgressPollers.get(id) != this) return;
-						live.setValue(progress);
-						if (progress.getState() !=
-								FileTransferProgress.State.TRANSFERRING) {
-							fileProgress.remove(id);
-							fileProgressPollers.remove(id);
-						} else {
-							long delay = h.getFileSize() > 1024L * 1024 * 1024 ?
-									2000L : 1000L;
-							fileHandler.postDelayed(this, delay);
-						}
-					});
 				});
 			}
 		};
 		fileProgressPollers.put(id, poll);
 		fileHandler.post(poll);
+	}
+
+	@UiThread
+	private void loadFileProgress(FileTransferHeader h,
+			MutableLiveData<FileTransferProgress> live,
+			@Nullable Runnable whenTransferring) {
+		runOnDbThread(() -> {
+			FileTransferProgress p;
+			try {
+				p = fileTransferManager.getProgress(h);
+			} catch (DbException e) {
+				FileTransferProgress old = live.getValue();
+				long transferred = old == null ? 0 : old.getTransferred();
+				p = new FileTransferProgress(FileTransferProgress.State.ERROR,
+						transferred, h.getFileSize());
+			}
+			FileTransferProgress progress = p;
+			fileHandler.post(() -> {
+				if (cleared) return;
+				MessageId id = h.getId();
+				live.setValue(progress);
+				if (progress.getState() != FileTransferProgress.State.TRANSFERRING) {
+					fileProgress.remove(id);
+					fileProgressHeaders.remove(id);
+					fileProgressPollers.remove(id);
+				} else if (whenTransferring != null) {
+					whenTransferring.run();
+				}
+			});
+		});
 	}
 
 	LiveData<ContactItem> getContactItem() {

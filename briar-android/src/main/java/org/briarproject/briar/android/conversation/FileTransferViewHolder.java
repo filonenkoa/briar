@@ -10,6 +10,8 @@ import org.briarproject.briar.api.filetransfer.FileTransferProgress;
 import org.briarproject.briar.api.filetransfer.FileTransferProgress.State;
 import org.briarproject.nullsafety.NotNullByDefault;
 
+import java.util.Locale;
+
 import androidx.annotation.Nullable;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.LifecycleOwner;
@@ -92,7 +94,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 			stopTransfer.setVisibility(GONE);
 			if (status != null) status.setVisibility(INVISIBLE);
 			imagePreview.setVisibility(GONE);
-			imagePreview.setTag(null);
+			imagePreview.setTag(R.id.file_transfer_preview_key, null);
 			progressText.setText(itemView.getContext().getString(
 					R.string.file_transfer_progress, 0,
 					formatFileSize(itemView.getContext(), 0),
@@ -109,11 +111,11 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 			progressText.setText(R.string.file_transfer_tap_to_open);
 			if (isImage(item)) {
 				imagePreview.setVisibility(VISIBLE);
-				imagePreview.setTag(item.getKey());
+				imagePreview.setTag(R.id.file_transfer_preview_key, item.getKey());
 				listener.onFilePreviewRequested(item, imagePreview);
 			} else {
 				imagePreview.setVisibility(GONE);
-				imagePreview.setTag(null);
+				imagePreview.setTag(R.id.file_transfer_preview_key, null);
 			}
 		} else if (state == State.ERROR) {
 			progressBar.setVisibility(GONE);
@@ -121,7 +123,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 			if (status != null) status.setVisibility(INVISIBLE);
 			progressText.setText(R.string.file_transfer_error);
 			imagePreview.setVisibility(GONE);
-			imagePreview.setTag(null);
+			imagePreview.setTag(R.id.file_transfer_preview_key, null);
 		} else if (state == State.CANCELLED) {
 			progressBar.setVisibility(GONE);
 			stopTransfer.setVisibility(GONE);
@@ -130,7 +132,7 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 					R.string.file_transfer_cancelled :
 					R.string.file_transfer_cancelled_by_sender);
 			imagePreview.setVisibility(GONE);
-			imagePreview.setTag(null);
+			imagePreview.setTag(R.id.file_transfer_preview_key, null);
 		} else if (state == State.REJECTED) {
 			progressBar.setVisibility(GONE);
 			stopTransfer.setVisibility(GONE);
@@ -139,14 +141,14 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 					R.string.file_transfer_rejected_by_receiver :
 					R.string.file_transfer_rejected);
 			imagePreview.setVisibility(GONE);
-			imagePreview.setTag(null);
+			imagePreview.setTag(R.id.file_transfer_preview_key, null);
 		} else {
 			progressBar.setVisibility(VISIBLE);
 			stopTransfer.setVisibility(VISIBLE);
 			if (status != null) status.setVisibility(INVISIBLE);
 			progressBar.setProgress(pct);
 			imagePreview.setVisibility(GONE);
-			imagePreview.setTag(null);
+			imagePreview.setTag(R.id.file_transfer_preview_key, null);
 			progressText.setText(itemView.getContext().getString(
 					R.string.file_transfer_progress, pct,
 					formatFileSize(itemView.getContext(), p.getTransferred()),
@@ -155,6 +157,24 @@ class FileTransferViewHolder extends ConversationItemViewHolder {
 	}
 
 	private boolean isImage(ConversationFileItem item) {
-		return item.getHeader().getContentType().startsWith("image/");
+		return shouldShowImagePreview(item.getHeader().getContentType(),
+				item.getHeader().getFileName());
+	}
+
+	static boolean shouldShowImagePreview(String contentType, String fileName) {
+		if (contentType.startsWith("image/")) return true;
+		if (!isGenericContentType(contentType)) return false;
+		String name = fileName.toLowerCase(Locale.US);
+		return name.endsWith(".jpg") || name.endsWith(".jpeg") ||
+				name.endsWith(".png") || name.endsWith(".gif") ||
+				name.endsWith(".webp") || name.endsWith(".bmp") ||
+				name.endsWith(".heic") || name.endsWith(".heif") ||
+				name.endsWith(".avif");
+	}
+
+	private static boolean isGenericContentType(String contentType) {
+		return contentType.equals("application/octet-stream") ||
+				contentType.equals("application/unknown") ||
+				contentType.equals("*/*");
 	}
 }

@@ -17,6 +17,7 @@ import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.NoSuchMessageException;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.lifecycle.LifecycleManager.OpenDatabaseHook;
+import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.bramble.api.sync.Group;
 import org.briarproject.bramble.api.sync.Group.Visibility;
 import org.briarproject.bramble.api.sync.GroupId;
@@ -58,11 +59,14 @@ import java.util.Set;
 import java.util.logging.Logger;
 
 import javax.annotation.concurrent.Immutable;
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 
 import static java.util.Collections.emptyList;
 import static java.util.logging.Logger.getLogger;
 import static org.briarproject.bramble.api.client.ContactGroupConstants.GROUP_KEY_CONTACT_ID;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_RECEIVED_VIA_TRANSPORT;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_BODY_LENGTH;
 import static org.briarproject.bramble.api.sync.validation.IncomingMessageHook.DeliveryAction.ACCEPT_DO_NOT_SHARE;
 import static org.briarproject.bramble.util.IoUtils.copyAndClose;
@@ -213,7 +217,7 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 				NO_AUTO_DELETE_TIMER);
 		PrivateMessageHeader header =
 				new PrivateMessageHeader(m.getId(), groupId, timestamp, local,
-						read, false, false, hasText, headers, timer);
+						read, false, false, hasText, headers, timer, null);
 		ContactId contactId = getContactId(txn, groupId);
 		PrivateMessageReceivedEvent event =
 				new PrivateMessageReceivedEvent(header, contactId);
@@ -424,24 +428,35 @@ class MessagingManagerImpl implements MessagingManager, IncomingMessageHook,
 					continue;
 				long timestamp = meta.getLong(MSG_KEY_TIMESTAMP);
 				boolean local = meta.getBoolean(MSG_KEY_LOCAL);
+				TransportId transportId = getTransferTransport(meta, local);
 				boolean read = meta.getBoolean(MSG_KEY_READ);
 				if (messageType == null) {
 					headers.add(new PrivateMessageHeader(id, g, timestamp,
 							local, read, s.isSent(), s.isSeen(), true,
-							emptyList(), NO_AUTO_DELETE_TIMER));
+							emptyList(), NO_AUTO_DELETE_TIMER, transportId));
 				} else {
 					boolean hasText = meta.getBoolean(MSG_KEY_HAS_TEXT);
 					long timer = meta.getLong(MSG_KEY_AUTO_DELETE_TIMER,
 							NO_AUTO_DELETE_TIMER);
 					headers.add(new PrivateMessageHeader(id, g, timestamp,
 							local, read, s.isSent(), s.isSeen(), hasText,
-							parseAttachmentHeaders(g, meta), timer));
+							parseAttachmentHeaders(g, meta), timer,
+							transportId));
 				}
 			} catch (FormatException e) {
 				throw new DbException(e);
 			}
 		}
 		return headers;
+	}
+
+	@Nullable
+	private TransportId getTransferTransport(BdfDictionary meta, boolean local)
+			throws FormatException {
+		String key = local ? KEY_FIRST_SENT_VIA_TRANSPORT :
+				KEY_RECEIVED_VIA_TRANSPORT;
+		String transport = meta.getOptionalString(key);
+		return transport == null ? null : new TransportId(transport);
 	}
 
 	@Override

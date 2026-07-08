@@ -35,7 +35,14 @@ import org.robolectric.annotation.Config;
 
 import java.util.concurrent.Executor;
 
+import androidx.lifecycle.LiveData;
+
+import static android.os.Looper.getMainLooper;
 import static org.briarproject.bramble.test.TestUtils.getRandomId;
+import static org.junit.Assert.assertEquals;
+import static org.robolectric.Shadows.shadowOf;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 21)
@@ -168,6 +175,45 @@ public class ConversationViewModelTest extends BrambleMockTestCase {
 		}});
 
 		viewModel.stopFileTransfer(h);
+	}
+
+	@Test
+	public void testFileTransferProgressPollsEveryTenSeconds()
+			throws Exception {
+		FileTransferHeader h = header(true);
+
+		context.checking(new Expectations() {{
+			exactly(2).of(lifecycleManager).waitForDatabase();
+			exactly(2).of(fileTransferManager).getProgress(h);
+			will(returnValue(progress(State.TRANSFERRING)));
+		}});
+
+		viewModel.getFileProgress(h);
+
+		shadowOf(getMainLooper()).idle();
+		shadowOf(getMainLooper()).idleFor(9_999L, MILLISECONDS);
+		shadowOf(getMainLooper()).idleFor(1L, MILLISECONDS);
+	}
+
+	@Test
+	public void testRefreshFileTransferProgressUpdatesActiveTransfer()
+			throws Exception {
+		FileTransferHeader h = header(true);
+
+		context.checking(new Expectations() {{
+			exactly(2).of(lifecycleManager).waitForDatabase();
+			exactly(2).of(fileTransferManager).getProgress(h);
+			will(onConsecutiveCalls(returnValue(progress(State.TRANSFERRING)),
+					returnValue(progress(State.COMPLETE))));
+		}});
+
+		LiveData<FileTransferProgress> progress = viewModel.getFileProgress(h);
+		shadowOf(getMainLooper()).idle();
+
+		viewModel.refreshFileProgress();
+		shadowOf(getMainLooper()).idle();
+
+		assertEquals(State.COMPLETE, progress.getValue().getState());
 	}
 
 	private FileTransferProgress progress(State state) {

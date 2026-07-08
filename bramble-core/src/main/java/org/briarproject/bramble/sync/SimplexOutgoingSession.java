@@ -1,9 +1,13 @@
 package org.briarproject.bramble.sync;
 
+import org.briarproject.bramble.api.FormatException;
 import org.briarproject.bramble.api.contact.ContactId;
 import org.briarproject.bramble.api.contact.event.ContactRemovedEvent;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
 import org.briarproject.bramble.api.db.DbException;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.event.Event;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.event.EventListener;
@@ -19,11 +23,13 @@ import org.briarproject.bramble.api.sync.SyncRecordWriter;
 import org.briarproject.bramble.api.sync.SyncSession;
 import org.briarproject.bramble.api.sync.Versions;
 import org.briarproject.bramble.api.sync.event.CloseSyncConnectionsEvent;
+import org.briarproject.bramble.api.sync.event.MessageTransportUpdatedEvent;
 import org.briarproject.bramble.api.transport.StreamWriter;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.logging.Logger;
 
 import javax.annotation.concurrent.ThreadSafe;
@@ -35,6 +41,7 @@ import static org.briarproject.bramble.api.lifecycle.LifecycleManager.LifecycleS
 import static org.briarproject.bramble.api.record.Record.RECORD_HEADER_BYTES;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_IDS;
 import static org.briarproject.bramble.api.sync.SyncConstants.MAX_MESSAGE_LENGTH;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
 import static org.briarproject.bramble.api.sync.SyncConstants.SUPPORTED_VERSIONS;
 import static org.briarproject.bramble.util.LogUtils.logException;
 
@@ -61,6 +68,7 @@ class SimplexOutgoingSession implements SyncSession, EventListener {
 			(RECORD_HEADER_BYTES + MAX_MESSAGE_LENGTH) * 2;
 
 	protected final DatabaseComponent db;
+	protected final MetadataEncoder metadataEncoder;
 	protected final EventBus eventBus;
 	protected final ContactId contactId;
 	protected final TransportId transportId;
@@ -71,6 +79,7 @@ class SimplexOutgoingSession implements SyncSession, EventListener {
 	private volatile boolean interrupted = false;
 
 	SimplexOutgoingSession(DatabaseComponent db,
+			MetadataEncoder metadataEncoder,
 			EventBus eventBus,
 			ContactId contactId,
 			TransportId transportId,
@@ -78,6 +87,7 @@ class SimplexOutgoingSession implements SyncSession, EventListener {
 			StreamWriter streamWriter,
 			SyncRecordWriter recordWriter) {
 		this.db = db;
+		this.metadataEncoder = metadataEncoder;
 		this.eventBus = eventBus;
 		this.contactId = contactId;
 		this.transportId = transportId;
@@ -156,8 +166,30 @@ class SimplexOutgoingSession implements SyncSession, EventListener {
 		if (LOG.isLoggable(INFO))
 			LOG.info("Generated batch: " + (b != null));
 		if (b == null) return false; // No more messages to send
-		for (Message m : b) recordWriter.writeMessage(m);
+		for (Message m : b) {
+			recordWriter.writeMessage(m);
+			recordFirstSentTransport(m);
+		}
 		LOG.info("Sent batch");
 		return true;
+	}
+
+	void recordFirstSentTransport(Message m) throws DbException, IOException {
+		try {
+			db.transaction(false, txn -> {
+				Metadata meta = db.getMessageMetadata(txn, m.getId());
+				if (!meta.containsKey(KEY_FIRST_SENT_VIA_TRANSPORT)) {
+					BdfDictionary transportMeta = new BdfDictionary();
+					transportMeta.put(KEY_FIRST_SENT_VIA_TRANSPORT,
+							transportId.getString());
+					db.mergeMessageMetadata(txn, m.getId(),
+							metadataEncoder.encode(transportMeta));
+					txn.attach(new MessageTransportUpdatedEvent(contactId,
+							Collections.singletonList(m.getId())));
+				}
+			});
+		} catch (FormatException e) {
+			throw new AssertionError(e);
+		}
 	}
 }

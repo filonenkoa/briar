@@ -158,6 +158,12 @@
 	<string name="transport_status_bluetooth_inactive">Bluetooth inactive</string>
 	<string name="transport_status_all_inactive">Internet inactive, Wi-Fi inactive, Bluetooth inactive</string>
 	<string name="transport_status_summary">%1$s, %2$s, %3$s</string>
+	<string name="message_received_via_internet">Received via Internet</string>
+	<string name="message_received_via_wifi">Received via Wi-Fi</string>
+	<string name="message_received_via_bluetooth">Received via Bluetooth</string>
+	<string name="message_sent_via_internet">Sent via Internet</string>
+	<string name="message_sent_via_wifi">Sent via Wi-Fi</string>
+	<string name="message_sent_via_bluetooth">Sent via Bluetooth</string>
 	<string name="send">Send</string>
 	<string name="allow">Allow</string>
 	<string name="open">Open</string>

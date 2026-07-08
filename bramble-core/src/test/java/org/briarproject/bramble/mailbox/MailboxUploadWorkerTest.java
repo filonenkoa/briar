@@ -3,7 +3,10 @@ package org.briarproject.bramble.mailbox;
 import org.briarproject.bramble.api.Cancellable;
 import org.briarproject.bramble.api.connection.ConnectionRegistry;
 import org.briarproject.bramble.api.contact.ContactId;
+import org.briarproject.bramble.api.data.BdfDictionary;
+import org.briarproject.bramble.api.data.MetadataEncoder;
 import org.briarproject.bramble.api.db.DatabaseComponent;
+import org.briarproject.bramble.api.db.Metadata;
 import org.briarproject.bramble.api.db.Transaction;
 import org.briarproject.bramble.api.event.EventBus;
 import org.briarproject.bramble.api.mailbox.MailboxFolderId;
@@ -38,7 +41,9 @@ import static java.util.Collections.singletonList;
 import static java.util.Collections.singletonMap;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.briarproject.bramble.api.mailbox.MailboxConstants.CLIENT_SUPPORTS;
+import static org.briarproject.bramble.api.mailbox.MailboxConstants.ID;
 import static org.briarproject.bramble.api.mailbox.MailboxConstants.MAX_LATENCY;
+import static org.briarproject.bramble.api.sync.MessageTransportMetadata.KEY_FIRST_SENT_VIA_TRANSPORT;
 import static org.briarproject.bramble.mailbox.MailboxUploadWorker.CHECK_DELAY_MS;
 import static org.briarproject.bramble.mailbox.MailboxUploadWorker.RETRY_DELAY_MS;
 import static org.briarproject.bramble.test.TestUtils.deleteTestDirectory;
@@ -53,6 +58,8 @@ public class MailboxUploadWorkerTest extends BrambleMockTestCase {
 
 	private final Executor ioExecutor = context.mock(Executor.class);
 	private final DatabaseComponent db = context.mock(DatabaseComponent.class);
+	private final MetadataEncoder metadataEncoder =
+			context.mock(MetadataEncoder.class);
 	private final Clock clock = context.mock(Clock.class);
 	private final TaskScheduler taskScheduler =
 			context.mock(TaskScheduler.class);
@@ -92,10 +99,10 @@ public class MailboxUploadWorkerTest extends BrambleMockTestCase {
 	public void setUp() {
 		testDir = getTestDirectory();
 		tempFile = new File(testDir, "temp");
-		worker = new MailboxUploadWorker(ioExecutor, db, clock, taskScheduler,
-				eventBus, connectionRegistry, connectivityChecker,
-				mailboxApiCaller, mailboxApi, mailboxFileManager,
-				mailboxProperties, folderId, contactId);
+		worker = new MailboxUploadWorker(ioExecutor, db, metadataEncoder, clock,
+				taskScheduler, eventBus, connectionRegistry, connectivityChecker,
+				mailboxApiCaller, mailboxApi, mailboxFileManager, mailboxProperties,
+				folderId, contactId);
 	}
 
 	@After
@@ -212,12 +219,21 @@ public class MailboxUploadWorkerTest extends BrambleMockTestCase {
 		// the acked/sent messages in the DB, and check the connection
 		// registry. We're not connected to the contact, so the worker should
 		// check for more data to send
+		Metadata emptyMetadata = new Metadata();
+		Metadata encodedMetadata = new Metadata();
+		BdfDictionary transportMetadata = new BdfDictionary();
+		transportMetadata.put(KEY_FIRST_SENT_VIA_TRANSPORT, ID.getString());
 		context.checking(new DbExpectations() {{
 			oneOf(mailboxApi).addFile(mailboxProperties, folderId, tempFile);
 			oneOf(db).transaction(with(false), withDbRunnable(recordTxn));
 			oneOf(db).setAckSent(recordTxn, contactId, singletonList(ackedId));
 			oneOf(db).setMessagesSent(recordTxn, contactId,
 					singletonList(sentId), MAX_LATENCY);
+			oneOf(db).getMessageMetadata(recordTxn, sentId);
+			will(returnValue(emptyMetadata));
+			oneOf(metadataEncoder).encode(transportMetadata);
+			will(returnValue(encodedMetadata));
+			oneOf(db).mergeMessageMetadata(recordTxn, sentId, encodedMetadata);
 		}});
 		expectCheckConnectionRegistry(false);
 		expectCheckForDataToSendNoDataWaiting();

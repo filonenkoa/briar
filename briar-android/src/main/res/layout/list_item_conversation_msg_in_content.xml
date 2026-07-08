@@ -72,6 +72,18 @@
 			tools:text="Dec 24, 13:37" />
 
 		<ImageView
+			android:id="@+id/messageTransport"
+			android:layout_width="12dp"
+			android:layout_height="12dp"
+			android:layout_marginStart="4dp"
+			android:layout_marginLeft="4dp"
+			android:visibility="gone"
+			app:tint="?android:attr/textColorSecondary"
+			tools:ignore="ContentDescription"
+			tools:src="@drawable/ic_transport_internet"
+			tools:visibility="visible" />
+
+		<ImageView
 			android:id="@+id/bomb"
 			android:layout_width="wrap_content"
 			android:layout_height="wrap_content"

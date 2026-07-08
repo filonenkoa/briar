@@ -1154,6 +1154,41 @@ public class FileTransferStorageTest extends BrambleMockTestCase {
 	}
 
 	@Test
+	public void testOutgoingProgressWaitsForChunksToBeSeen() throws Exception {
+		Transaction txn = new Transaction(null, true);
+		Contact contact = getContact();
+		Group group = getGroup(CLIENT_ID, MAJOR_VERSION);
+		UniqueId fileId = new UniqueId(getRandomId());
+		MessageId headerId = new MessageId(getRandomId());
+		MessageId chunkId = new MessageId(getRandomId());
+		BdfDictionary groupMeta = BdfDictionary.of(new BdfEntry(
+				GROUP_KEY_CONTACT_ID, contact.getId().getInt()));
+		FileTransferHeader header = new FileTransferHeader(headerId,
+				group.getId(), 1, true, true, false, false, 0, fileId,
+				"file.bin", "application/octet-stream", 1, 1);
+		BdfDictionary headerMeta = headerMetadata(fileId, "file.bin", 1L, 1, 0);
+
+		context.checking(new Expectations() {{
+			oneOf(clientHelper).getMessageMetadataAsDictionary(txn, headerId);
+			will(returnValue(headerMeta));
+			allowing(clientHelper).getGroupMetadataAsDictionary(txn,
+					group.getId());
+			will(returnValue(groupMeta));
+			oneOf(clientHelper).getMessageIds(with(same(txn)),
+					with(equal(group.getId())), with(any(BdfDictionary.class)));
+			will(returnValue(Arrays.asList(chunkId)));
+			oneOf(db).getMessageStatus(txn, contact.getId(), chunkId);
+			will(returnValue(new MessageStatus(chunkId, contact.getId(), true,
+					false)));
+		}});
+
+		FileTransferProgress p = getOutgoingProgress(txn, header);
+
+		assertEquals(FileTransferProgress.State.TRANSFERRING, p.getState());
+		assertEquals(0, p.getTransferred());
+	}
+
+	@Test
 	public void testOutgoingProgressCachesChunkIds() throws Exception {
 		Transaction txn = new Transaction(null, true);
 		Contact contact = getContact();

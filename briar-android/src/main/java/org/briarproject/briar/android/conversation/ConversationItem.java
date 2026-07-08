@@ -1,8 +1,10 @@
 package org.briarproject.briar.android.conversation;
 
+import org.briarproject.bramble.api.plugin.TransportId;
 import org.briarproject.bramble.api.sync.GroupId;
 import org.briarproject.bramble.api.sync.MessageId;
 import org.briarproject.briar.api.conversation.ConversationMessageHeader;
+import org.briarproject.briar.api.messaging.PrivateMessageHeader;
 import org.briarproject.nullsafety.NotNullByDefault;
 
 import javax.annotation.Nullable;
@@ -26,6 +28,8 @@ abstract class ConversationItem {
 	private final long time, autoDeleteTimer;
 	private final boolean isIncoming;
 	private final LiveData<String> contactName;
+	@Nullable
+	private TransportId transportId;
 	private boolean read, sent, seen, showTimerNotice;
 
 	ConversationItem(@LayoutRes int layoutRes, ConversationMessageHeader h,
@@ -41,6 +45,8 @@ abstract class ConversationItem {
 		this.seen = h.isSeen();
 		this.isIncoming = !h.isLocal();
 		this.contactName = contactName;
+		this.transportId = h instanceof PrivateMessageHeader ?
+				((PrivateMessageHeader) h).getTransportId() : null;
 		this.showTimerNotice = false;
 	}
 
@@ -119,6 +125,15 @@ abstract class ConversationItem {
 
 	boolean isIncoming() {
 		return isIncoming;
+	}
+
+	@Nullable
+	TransportId getTransportId() {
+		return transportId;
+	}
+
+	void setTransportId(@Nullable TransportId transportId) {
+		this.transportId = transportId;
 	}
 
 	public LiveData<String> getContactName() {
